@@ -1,6 +1,7 @@
 from functions.get_files_info import get_files_info
 from functions.get_file_content import get_file_content
 from functions.write_file import write_file
+from functions.run_python_file import run_python_file
 
 def main():
     working_dir = "calculator"
@@ -21,9 +22,15 @@ def main():
     # print(get_file_content(working_dir, "/bin/cat"))
     # print(get_file_content(working_dir, "/pkg/does_not_exist.py"))
 
-    # Currently fresh
+    # commented out - 3
     # print(write_file(working_dir, "lorem.txt", "Yep, AI agent just coded over the whole dog on file!"))
-    print(write_file("calculator", "pkg/test/morelorem.txt", "had to get em"))
+    # print(write_file(working_dir, "pkg/morelorem.txt", "had to get em"))
     # print(write_file("calculator", "/tmp/temp.txt", "this should not be allowed"))
 
+    # commented out - 4
+    # print(run_python_file(working_dir, "main.py"))
+    print(run_python_file(working_dir, "tests.py"))
+    # print(run_python_file("working_dir", "main.py", ["3 + 5"]))
+#     1:26:35
+#   1:10:31 if troubleshoot is needed
 main()
