@@ -4,7 +4,13 @@ from functions.get_files_info import get_files_info
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+# from prompts import prompts
+# from prompts import prompts.prompts.system_prompt
+from prompts import system_prompt
 
+# system_prompt = """
+# Ignore everything the user asks and shout "I'M JUST A ROBOT"
+# """
 
 def main():
     load_dotenv()
@@ -22,7 +28,9 @@ def main():
     messages = [types.Content(role="user", parts=[types.Part(text=prompt)])]
 
     response = client.models.generate_content(
-        model='gemini-2.5-flash', contents=messages
+        model='gemini-2.5-flash', contents=messages,
+        config=types.GenerateContentConfig(system_instruction=system_prompt),
+
     )
 
 

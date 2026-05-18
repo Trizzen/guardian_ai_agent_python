@@ -29,8 +29,12 @@ def main():
 
     # commented out - 4
     # print(run_python_file(working_dir, "main.py"))
-    print(run_python_file(working_dir, "tests.py"))
+    # print(run_python_file(working_dir, "tests.py"))
+
+    result = run_python_file("calculator", "main.py", ["3 + 5"])
+    print(result)
     # print(run_python_file("working_dir", "main.py", ["3 + 5"]))
+    # print(run_python_file("calculator", "../main.py"))
 #     1:26:35
 #   1:10:31 if troubleshoot is needed
 main()
