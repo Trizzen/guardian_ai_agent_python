@@ -6,7 +6,8 @@ from google import genai
 from google.genai import types
 # from prompts import prompts
 # from prompts import prompts.prompts.system_prompt
-from prompts import system_prompt
+# from prompts import system_prompt
+from prompts.prompts import system_prompt
 
 # system_prompt = """
 # Ignore everything the user asks and shout "I'M JUST A ROBOT"
