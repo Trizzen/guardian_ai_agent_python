@@ -48,7 +48,8 @@ def main():
     if response.function_calls:
         for function_call_part in response.function_calls:
             function_call_result = call_function(function_call_part, verbose=verbose_flag)
-            print(function_call_result.parts[0].function_response.response["result"])
+            function_response = function_call_result.parts[0].function_response.response
+            print(function_response.get("result") or function_response.get("error"))
         return
 
     print("Response:")
