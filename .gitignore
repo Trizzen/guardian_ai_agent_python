@@ -27,6 +27,19 @@ credentials.json
 
 token.json
 
+# Jaza's human-owned local state (committed defaults live in data/defaults)
+
+data/runtime/*.json
+data/runtime/*.corrupt-*
+!data/runtime/.gitkeep
+
+# Angular output
+
+frontend/node_modules/
+frontend/dist/
+frontend/.angular/
+frontend/coverage/
+
 # IDE/editor
 
 .idea/
@@ -36,4 +49,3 @@ token.json
 # OS
 
 .DS_Store
-

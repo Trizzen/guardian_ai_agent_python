@@ -1,0 +1,596 @@
+<div class="command-shell">
+  @if (vm$ | async; as vm) {
+    <header class="topbar">
+      <div class="identity-lockup">
+        <div class="sentinel-mark" aria-hidden="true">
+          <span class="sentinel-gem"></span>
+        </div>
+        <div>
+          <p class="eyebrow">{{ vm.dashboard.identity.role }} · Local Command Center</p>
+          <h1>Jaza <span>Soulminder</span></h1>
+          <p class="mission">{{ vm.dashboard.identity.message }}</p>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <div class="presence-control" [class.unavailable]="!vm.petPresence.available">
+          <div class="presence-copy">
+            <span class="presence-label">Codex presence</span>
+            <span class="presence-value">
+              {{ vm.petPresence.display_name || 'Unavailable' }}
+            </span>
+          </div>
+          <div class="presence-buttons" aria-label="Select the visible Codex pet">
+            <button
+              type="button"
+              class="presence-button jaza-presence"
+              [class.active]="vm.petPresence.selected_pet === 'jaza'"
+              [attr.aria-pressed]="vm.petPresence.selected_pet === 'jaza'"
+              [disabled]="
+                !vm.petPresence.available ||
+                petSwitching !== null ||
+                vm.petPresence.selected_pet === 'jaza'
+              "
+              (click)="switchPet('jaza')"
+            >
+              {{ petSwitching === 'jaza' ? 'Recalling…' : vm.petPresence.selected_pet === 'jaza' ? 'Jaza Active' : 'Recall Jaza' }}
+            </button>
+            <button
+              type="button"
+              class="presence-button star-presence"
+              [class.active]="vm.petPresence.selected_pet === 'star'"
+              [attr.aria-pressed]="vm.petPresence.selected_pet === 'star'"
+              [disabled]="
+                !vm.petPresence.available ||
+                petSwitching !== null ||
+                vm.petPresence.selected_pet === 'star'
+              "
+              (click)="switchPet('star')"
+            >
+              {{ petSwitching === 'star' ? 'Handing over…' : vm.petPresence.selected_pet === 'star' ? 'Star Active' : 'Hand to Star' }}
+            </button>
+          </div>
+        </div>
+        <div class="action-stack">
+          <div class="intelligence-health" aria-label="Reporting connection status">
+            <span [class.online]="vm.reporting.guard_this_kingdom.connected"></span>
+            GTK Data {{ vm.reporting.guard_this_kingdom.connected ? 'Connected' : 'Unavailable' }}
+            <i></i>
+            <span [class.online]="vm.reporting.luna.ready"></span>
+            Luna {{ vm.reporting.luna.ready ? 'Ready' : 'Unavailable' }}
+          </div>
+          <div class="local-status"><span></span> Local state secure</div>
+          <button class="primary-action" type="button" (click)="openAdd()">
+            <span>＋</span> Add Goal / Task
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section class="metric-grid" aria-label="Sentinel summary">
+        <article class="metric-card attention-card">
+          <div class="metric-icon">!</div>
+          <div>
+            <p>Needs My Attention</p>
+            <strong>{{ vm.dashboard.metrics.needs_my_attention }}</strong>
+          </div>
+          <span class="metric-caption">Direction required</span>
+        </article>
+        <article class="metric-card">
+          <p>Active Work</p>
+          <strong>{{ vm.dashboard.metrics.active_work }}</strong>
+          <span class="metric-caption">In motion now</span>
+        </article>
+        <article class="metric-card">
+          <p>Ready</p>
+          <strong>{{ vm.dashboard.metrics.ready }}</strong>
+          <span class="metric-caption">Cleared to begin</span>
+        </article>
+        <article class="metric-card">
+          <p>Waiting</p>
+          <strong>{{ vm.dashboard.metrics.waiting }}</strong>
+          <span class="metric-caption">Watching dependencies</span>
+        </article>
+        <article class="metric-card">
+          <p>Completed Today</p>
+          <strong>{{ vm.dashboard.metrics.completed_today }}</strong>
+          <span class="metric-caption">Outcomes secured</span>
+        </article>
+      </section>
+
+      <section class="command-grid">
+        <div class="management-column">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Big-picture stewardship</p>
+              <h2>Command Domains</h2>
+            </div>
+            <span>{{ vm.programs.length }} programs on watch</span>
+          </div>
+
+          <div class="program-grid">
+            @for (program of vm.programs; track program.id) {
+              <button
+                type="button"
+                class="program-card accent-{{ program.accent }}"
+                [class.selected]="vm.selected.type === 'program' && vm.selected.id === program.id"
+                (click)="selectContext('program', program.id)"
+              >
+                <span class="program-orbit" aria-hidden="true"></span>
+                <span class="program-name">{{ program.short_name }}</span>
+                <span class="program-description">{{ program.description }}</span>
+                <span class="program-count">
+                  {{ contextCount(vm.workItems, 'program', program.id) }} items
+                </span>
+              </button>
+            }
+          </div>
+
+          <div class="section-heading project-heading">
+            <div>
+              <p class="eyebrow">Software portfolio</p>
+              <h2>Projects</h2>
+            </div>
+            <span>Managed here · Executed separately</span>
+          </div>
+
+          <div class="project-list">
+            @for (project of vm.projects; track project.id) {
+              <button
+                type="button"
+                class="project-row"
+                [class.selected]="vm.selected.type === 'project' && vm.selected.id === project.id"
+                (click)="selectContext('project', project.id)"
+              >
+                <span class="project-monogram">{{ project.name.charAt(0) }}</span>
+                <span class="project-copy">
+                  <strong>{{ project.name }}</strong>
+                  <small>{{ project.current_focus }}</small>
+                </span>
+                <span class="priority-pill priority-{{ project.priority }}">{{ project.priority }}</span>
+                <span class="status-dot status-{{ project.status }}"></span>
+                <span class="chevron">›</span>
+              </button>
+            }
+          </div>
+        </div>
+
+        <aside class="watch-column">
+          <div class="section-heading compact-heading">
+            <div>
+              <p class="eyebrow">Jaza is watching</p>
+              <h2>Sentinel Watch</h2>
+            </div>
+          </div>
+
+          <section class="watch-card attention-watch">
+            <div class="watch-card-title">
+              <span>Direction queue</span>
+              <strong>{{ vm.dashboard.metrics.needs_my_attention }}</strong>
+            </div>
+            @for (item of vm.dashboard.needs_attention; track item.id) {
+              <button class="watch-item" type="button" (click)="selectContext(item.target_type, item.target_id)">
+                <span class="watch-signal"></span>
+                <span>
+                  <strong>{{ item.title }}</strong>
+                  <small>{{ targetName(item.target_type, item.target_id) }}</small>
+                </span>
+              </button>
+            }
+            @for (project of vm.dashboard.attention_projects; track project.id) {
+              <button class="watch-item" type="button" (click)="selectContext('project', project.id)">
+                <span class="watch-signal"></span>
+                <span>
+                  <strong>{{ project.name }}</strong>
+                  <small>Project direction requested</small>
+                </span>
+              </button>
+            }
+            @for (checkIn of vm.dashboard.attention_check_ins; track checkIn.id) {
+              <button class="watch-item" type="button" (click)="selectContext(checkIn.target_type, checkIn.target_id)">
+                <span class="watch-signal"></span>
+                <span>
+                  <strong>{{ checkIn.body }}</strong>
+                  <small>{{ displayLabel(checkIn.status || 'requested') }} · {{ targetName(checkIn.target_type, checkIn.target_id) }}</small>
+                </span>
+              </button>
+            }
+            @if (vm.dashboard.metrics.needs_my_attention === 0) {
+              <p class="empty-copy">No direction is waiting. The board is clear.</p>
+            }
+          </section>
+
+          <section class="watch-card">
+            <div class="watch-card-title">
+              <span>Upcoming & review</span>
+              <strong>{{ vm.dashboard.upcoming.length }}</strong>
+            </div>
+            @for (item of vm.dashboard.upcoming; track item.id) {
+              <button class="watch-item" type="button" (click)="selectContext(item.target_type, item.target_id)">
+                <span class="date-block">
+                  <b>{{ (item.attention_at || '') | date: 'd' }}</b>
+                  <small>{{ (item.attention_at || '') | date: 'MMM' }}</small>
+                </span>
+                <span>
+                  <strong>{{ item.title }}</strong>
+                  <small>{{ item.attention_at | date: 'shortTime' }} · {{ targetName(item.target_type, item.target_id) }}</small>
+                </span>
+              </button>
+            } @empty {
+              <p class="empty-copy">Nothing scheduled yet.</p>
+            }
+          </section>
+
+          <section class="star-boundary">
+            <div class="star-icon">✦</div>
+            <div>
+              <p>Star Reborn queue</p>
+              <strong>{{ vm.dashboard.metrics.prepared_for_star }} prepared</strong>
+              <small>Intent only · no execution runtime connected</small>
+            </div>
+          </section>
+
+          <button class="usage-toggle" type="button" (click)="usageOpen = !usageOpen">
+            <span>AI / tool usage log</span><span>{{ usageOpen ? '−' : '+' }}</span>
+          </button>
+          @if (usageOpen) {
+            <form class="usage-form" (ngSubmit)="logUsage()">
+              <label>Provider or tool<input name="provider" [(ngModel)]="usageForm.provider_tool" /></label>
+              <div class="form-row">
+                <label>Token estimate<input name="tokens" type="number" min="0" [(ngModel)]="usageForm.token_estimate" /></label>
+                <label>Cost estimate<input name="cost" type="number" min="0" step="0.01" [(ngModel)]="usageForm.cost_estimate" /></label>
+              </div>
+              <label>Notes<input name="usageNotes" [(ngModel)]="usageForm.notes" /></label>
+              <button type="submit" class="small-action">Record locally</button>
+            </form>
+          }
+        </aside>
+      </section>
+
+      <section class="focus-panel">
+        <div class="focus-header">
+          <div>
+            <p class="eyebrow">Focused view · {{ vm.selected.type }}</p>
+            <h2>{{ vm.selectedEntity?.name }}</h2>
+            <p>{{ vm.selectedEntity?.description }}</p>
+          </div>
+          <button type="button" class="secondary-action" (click)="openAdd(vm.selected.type, vm.selected.id)">＋ Add here</button>
+        </div>
+
+        @if (asProject(vm.selectedEntity); as project) {
+          <div class="project-pulse">
+            <span class="pulse-label">Project pulse</span>
+            <label>Status
+              <select [ngModel]="project.status" (ngModelChange)="updateProject(project, { status: $event })">
+                @for (status of statuses; track status) { <option [value]="status">{{ displayLabel(status) }}</option> }
+              </select>
+            </label>
+            <label>Priority
+              <select [ngModel]="project.priority" (ngModelChange)="updateProject(project, { priority: $event })">
+                @for (priority of priorities; track priority) { <option [value]="priority">{{ displayLabel(priority) }}</option> }
+              </select>
+            </label>
+            <span class="next-action"><small>Next action</small>{{ project.next_action || 'Not set' }}</span>
+          </div>
+        }
+
+        @if (vm.selected.type === 'program') {
+          <section class="intelligence-panel" aria-live="polite">
+            <div class="intelligence-heading">
+              <div>
+                <p class="eyebrow">GuardThisKingdom evidence · Jaza reporting</p>
+                <h3>{{ report?.domain_label || vm.selectedEntity?.name }} Intelligence</h3>
+              </div>
+              <div class="report-window-control" aria-label="Reporting window">
+                @for (window of reportWindows; track window.id) {
+                  <button
+                    type="button"
+                    [class.active]="reportWindow === window.id"
+                    [disabled]="reportLoading || insightLoading"
+                    (click)="selectReportWindow(window.id)"
+                  >{{ window.label }}</button>
+                }
+              </div>
+            </div>
+
+            @if (reportLoading) {
+              <div class="report-loading">Jaza is reading the evidence…</div>
+            } @else if (report && report.domain === vm.selected.id) {
+              @if (report.available) {
+                <div class="source-contract">
+                  <span class="source-badge gtk-source">GTK · Read-only evidence</span>
+                  <span class="source-badge jaza-source">Jaza JSON · Planning state</span>
+                  <small>{{ report.window_label }} · {{ report.window_bounds?.timezone }} · {{ report.provenance.record_count }} relevant records</small>
+                </div>
+
+                <div class="report-metrics">
+                  <article><span>Completed</span><strong>{{ report.stats.completed_goals }}</strong></article>
+                  <article><span>Failed</span><strong>{{ report.stats.failed_goals }}</strong></article>
+                  <article><span>Completion</span><strong>{{ report.stats.completion_rate | number: '1.0-2' }}%</strong></article>
+                  <article><span>Completed min</span><strong>{{ report.stats.completed_minutes | number }}</strong></article>
+                  <article><span>Live</span><strong>{{ report.stats.live_goals }}</strong></article>
+                </div>
+
+                @if (report.attention_signals.length) {
+                  <div class="report-signals">
+                    @for (signal of report.attention_signals; track signal.code) {
+                      <div><span>!</span><p>{{ signal.message }}<small>{{ signal.rule }}</small></p></div>
+                    }
+                  </div>
+                }
+
+                <div class="report-columns">
+                  <section class="evidence-column">
+                    <div class="report-section-title">
+                      <div><span>Facts</span><h4>Recent / Live Activity</h4></div>
+                      <small>{{ report.classification.classified_count }} classified · {{ report.classification.unclassified_count }} awaiting Luna or review</small>
+                    </div>
+                    <div class="activity-list">
+                      @for (activity of report.activity; track activity.source_id) {
+                        <article class="activity-row">
+                          <span class="activity-status status-{{ activity.status }}"></span>
+                          <div>
+                            <strong>{{ activity.title }}</strong>
+                            <p>{{ activity.category || 'Unspecified' }} · {{ displayLabel(activity.status) }} · {{ activity.minutes === null ? 'No minute value' : activity.minutes + ' min' }}</p>
+                            <small>{{ activity.occurred_at | date: 'medium' }} · {{ activity.classification.reason }}</small>
+                          </div>
+                          <span class="behavior-pill">{{ displayLabel(activity.behavior) }}</span>
+                        </article>
+                      } @empty {
+                        <div class="report-empty">No safely classified GTK activity was found for this domain and window.</div>
+                      }
+                    </div>
+
+                    @if (report.planning_context.active_projects?.length || report.planning_context.work_items?.length) {
+                      <div class="planning-separation">
+                        <span>Jaza planning state</span>
+                        @for (project of report.planning_context.active_projects || []; track project.id) {
+                          <p><strong>{{ project.name }}</strong> {{ project.current_focus }}<small>Next: {{ project.next_action || 'Not set' }}</small></p>
+                        }
+                        @for (item of report.planning_context.work_items || []; track item.id) {
+                          <p><strong>{{ item.title }}</strong> {{ displayLabel(item.status) }}<small>Next: {{ item.next_action || 'Not set' }}</small></p>
+                        }
+                      </div>
+                    }
+                  </section>
+
+                  <aside class="luna-column">
+                    <div class="report-section-title">
+                      <div><span>Interpretation</span><h4>Jaza’s Read · Luna</h4></div>
+                      @if (report.insight) { <small>{{ report.insight.model }} · grounded</small> }
+                    </div>
+                    @if (report.insight; as insight) {
+                      <p class="insight-summary">{{ insight.summary }}</p>
+                      @if (insight.wins.length) {
+                        <div class="insight-block"><span>Wins</span>@for (item of insight.wins; track item) { <p>{{ item }}</p> }</div>
+                      }
+                      @if (insight.patterns.length) {
+                        <div class="insight-block"><span>Patterns</span>@for (item of insight.patterns; track item) { <p>{{ item }}</p> }</div>
+                      }
+                      @if (insight.risks_or_attention.length) {
+                        <div class="insight-block attention"><span>Attention</span>@for (item of insight.risks_or_attention; track item) { <p>{{ item }}</p> }</div>
+                      }
+                      <div class="next-focus"><span>Next sensible focus</span><p>{{ insight.recommended_next_focus }}</p></div>
+                      @if (insight.classification_decisions.length) {
+                        <div class="luna-decisions">
+                          <span>Luna classification decisions</span>
+                          <small>{{ insight.classification_decisions.length }} ambiguous facts categorized without changing GTK</small>
+                          @for (decision of insight.classification_decisions; track decision.source_id) {
+                            <p>
+                              <strong>{{ decision.domain }}</strong>
+                              {{ decision.reason }}
+                              <small>{{ decision.source_id }} · {{ decision.confidence * 100 | number:'1.0-0' }}% confidence</small>
+                            </p>
+                          }
+                        </div>
+                      }
+                      <div class="insight-actions">
+                        <button type="button" (click)="generateInsight(true)" [disabled]="insightLoading">{{ insightLoading ? 'Refreshing…' : 'Refresh Insight' }}</button>
+                        <button type="button" [class.active]="feedbackSent === true" (click)="sendReportFeedback(true)">Useful</button>
+                        <button type="button" [class.active]="feedbackSent === false" (click)="sendReportFeedback(false)">Needs Adjustment</button>
+                      </div>
+                    } @else {
+                      <div class="insight-empty">
+                        <span>◇</span>
+                        <h4>Facts are ready.</h4>
+                        <p>Luna runs only when requested. Deterministic reporting does not spend tokens.</p>
+                        <button type="button" class="small-action" (click)="generateInsight()" [disabled]="insightLoading || !vm.reporting.luna.ready">
+                          {{ insightLoading ? 'Luna is reading…' : 'Generate Jaza Insight' }}
+                        </button>
+                      </div>
+                    }
+                    @if (reportError) { <p class="report-error">{{ reportError }}</p> }
+                  </aside>
+                </div>
+              } @else {
+                <div class="report-unavailable">
+                  <strong>GTK Data Unavailable</strong>
+                  <p>{{ report.error?.message }} Jaza’s local command center remains fully operational.</p>
+                </div>
+              }
+            } @else if (reportError) {
+              <div class="report-unavailable"><strong>Reporting unavailable</strong><p>{{ reportError }}</p></div>
+            }
+          </section>
+        }
+
+        <div class="focus-content">
+          <div class="work-stack">
+            <div class="stack-heading">
+              <h3>Managed work</h3>
+              <span>{{ vm.contextItems.length }} items</span>
+            </div>
+            @for (item of vm.contextItems; track item.id) {
+              <article class="work-card priority-edge-{{ item.priority }}">
+                <div class="work-main">
+                  <div class="work-kickers">
+                    <span class="priority-pill priority-{{ item.priority }}">{{ item.priority }}</span>
+                    @if (item.execution_status === 'prepared_for_star') {
+                      <span class="star-pill">✦ Prepared for Star</span>
+                    }
+                    @if (item.human_check_in_status !== 'none') {
+                      <span class="checkin-pill">{{ displayLabel(item.human_check_in_status) }}</span>
+                    }
+                  </div>
+                  <h4>{{ item.title }}</h4>
+                  @if (item.description) { <p>{{ item.description }}</p> }
+                  @if (item.next_action) {
+                    <div class="next-step"><span>Next</span>{{ item.next_action }}</div>
+                  }
+                </div>
+                <div class="work-controls">
+                  <label>Status
+                    <select [ngModel]="item.status" (ngModelChange)="updateWorkItem(item, { status: $event })">
+                      @for (status of statuses; track status) { <option [value]="status">{{ displayLabel(status) }}</option> }
+                    </select>
+                  </label>
+                  <label>Priority
+                    <select [ngModel]="item.priority" (ngModelChange)="updateWorkItem(item, { priority: $event })">
+                      @for (priority of priorities; track priority) { <option [value]="priority">{{ displayLabel(priority) }}</option> }
+                    </select>
+                  </label>
+                  <button type="button" class="edit-action" (click)="openEdit(item)">Edit details</button>
+                </div>
+              </article>
+            } @empty {
+              <div class="empty-state">
+                <span>◇</span>
+                <h4>This area is quiet.</h4>
+                <p>Add the first goal, task, or scheduled review for {{ vm.selectedEntity?.name }}.</p>
+                <button type="button" class="small-action" (click)="openAdd(vm.selected.type, vm.selected.id)">Add first item</button>
+              </div>
+            }
+          </div>
+
+          <aside class="capture-panel">
+            <p class="eyebrow">Secure context</p>
+            <h3>Quick capture</h3>
+            <div class="segmented-control">
+              <button type="button" [class.active]="captureKind === 'note'" (click)="captureKind = 'note'">Note</button>
+              <button type="button" [class.active]="captureKind === 'check_in'" (click)="captureKind = 'check_in'">Check-in</button>
+            </div>
+            <textarea [(ngModel)]="captureBody" rows="5" placeholder="Observation, direction, decision, or checkpoint…"></textarea>
+            @if (captureKind === 'check_in') {
+              <label>Checkpoint state
+                <select [(ngModel)]="captureCheckInStatus">
+                  @for (status of checkInStatuses; track status) { <option [value]="status">{{ displayLabel(status) }}</option> }
+                </select>
+              </label>
+            }
+            <button type="button" class="small-action full-width" (click)="captureContext()">Secure {{ captureKind === 'note' ? 'note' : 'check-in' }}</button>
+
+            <div class="recent-note">
+              <span>Latest sentinel note</span>
+              @if (vm.dashboard.recent_notes[0]; as note) {
+                <p>“{{ note.body }}”</p>
+                <small>{{ targetName(note.target_type, note.target_id) }} · {{ note.created_at | date: 'mediumDate' }}</small>
+              } @else {
+                <p>No notes captured yet.</p>
+              }
+            </div>
+          </aside>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <span>Jaza Sentinel v0.2</span>
+      <span>Human-in-the-loop · GTK read-only evidence · No autonomous execution</span>
+    </footer>
+  } @else {
+    <div class="loading-screen">
+      <div class="sentinel-mark"><span class="sentinel-gem"></span></div>
+      <p>Jaza is gathering the bigger picture…</p>
+    </div>
+  }
+</div>
+
+@if (showWorkEditor) {
+  <div class="modal-backdrop" (click)="closeWorkEditor()">
+    <section class="work-modal" role="dialog" aria-modal="true" aria-labelledby="work-editor-title" (click)="$event.stopPropagation()">
+      <div class="modal-header">
+        <div>
+          <p class="eyebrow">{{ workForm.id ? 'Refine managed work' : 'Quick add' }}</p>
+          <h2 id="work-editor-title">{{ workForm.id ? 'Edit Goal / Task' : 'Add Goal / Task' }}</h2>
+        </div>
+        <button type="button" class="close-action" aria-label="Close" (click)="closeWorkEditor()">×</button>
+      </div>
+
+      <form (ngSubmit)="saveWorkItem()">
+        <label class="wide-field">Title <span>required</span>
+          <input name="title" maxlength="160" [(ngModel)]="workForm.title" placeholder="What needs to move forward?" autofocus />
+        </label>
+        <label class="wide-field">Description
+          <textarea name="description" rows="3" [(ngModel)]="workForm.description" placeholder="Enough context for the next focused check-in"></textarea>
+        </label>
+
+        <div class="form-row">
+          <label>Area type
+            <select name="targetType" [(ngModel)]="workForm.target_type" (ngModelChange)="workForm.target_id = $event === 'program' ? 'daily-command' : 'jaza-sentinel'">
+              <option value="program">Program / life domain</option>
+              <option value="project">Software project</option>
+            </select>
+          </label>
+          <label>Area
+            <select name="targetId" [(ngModel)]="workForm.target_id">
+              @if (currentSnapshot; as snapshot) {
+                @for (entity of workForm.target_type === 'program' ? snapshot.programs : snapshot.projects; track entity.id) {
+                  <option [value]="entity.id">{{ entity.name }}</option>
+                }
+              }
+            </select>
+          </label>
+        </div>
+
+        <div class="form-row three-up">
+          <label>Priority
+            <select name="priority" [(ngModel)]="workForm.priority">
+              @for (priority of priorities; track priority) { <option [value]="priority">{{ displayLabel(priority) }}</option> }
+            </select>
+          </label>
+          <label>Status
+            <select name="status" [(ngModel)]="workForm.status">
+              @for (status of statuses; track status) { <option [value]="status">{{ displayLabel(status) }}</option> }
+            </select>
+          </label>
+          <label>Assignee
+            <select name="assignee" [(ngModel)]="workForm.execution_assignee">
+              @for (assignee of assignees; track assignee) { <option [value]="assignee">{{ displayLabel(assignee) }}</option> }
+            </select>
+          </label>
+        </div>
+        @if (workForm.execution_assignee === 'star_reborn') {
+          <div class="boundary-note">✦ This marks the item <strong>Prepared for Star</strong>. It does not execute or delegate work.</div>
+        }
+
+        <label class="wide-field">Next action
+          <input name="nextAction" [(ngModel)]="workForm.next_action" placeholder="The clearest next move" />
+        </label>
+
+        <div class="form-row">
+          <label>Human checkpoint
+            <select name="checkIn" [(ngModel)]="workForm.human_check_in_status">
+              @for (status of checkInStatuses; track status) { <option [value]="status">{{ displayLabel(status) }}</option> }
+            </select>
+          </label>
+          <label>Scheduled for
+            <input name="scheduledFor" type="datetime-local" [(ngModel)]="workForm.scheduled_for" />
+          </label>
+        </div>
+        <label class="wide-field">Review after
+          <input name="reviewAfter" type="datetime-local" [(ngModel)]="workForm.review_after" />
+        </label>
+
+        @if (formError) { <div class="form-error">{{ formError }}</div> }
+        <div class="modal-actions">
+          <button type="button" class="secondary-action" (click)="closeWorkEditor()">Cancel</button>
+          <button type="submit" class="primary-action" [disabled]="saving">{{ saving ? 'Securing…' : 'Save to Jaza' }}</button>
+        </div>
+      </form>
+    </section>
+  </div>
+}
+
+@if (successMessage) {
+  <div class="toast" [class.error-toast]="formError === successMessage">{{ successMessage }}</div>
+}
