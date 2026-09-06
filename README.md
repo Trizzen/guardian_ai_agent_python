@@ -34,7 +34,7 @@ normalized Jaza facts → deterministic statistics → Luna interpretation
 - `jaza_sentinel/reporting/` contains normalized contracts, deterministic classification/statistics, the Jaza-specific Luna provider, report caching, and feedback orchestration.
 - `data/defaults/` contains committed seed state for seven programs, four software projects, and the initial Sentinel watch items.
 - `data/runtime/` contains ignored, human-owned runtime copies. Missing or malformed runtime documents recover from defaults; malformed files are preserved beside the replacement with a `.corrupt-<timestamp>` suffix.
-- `frontend/` contains a standalone Angular dashboard. Its development proxy forwards `/api` to Flask on `127.0.0.1:5000`.
+- `frontend/` contains a standalone Angular dashboard. Its development proxy forwards `/api` to Flask on `127.0.0.1:5001`.
 - `legacy_gemini/` preserves the former user-edited Gemini/Star CLI entrypoint. The original tool declarations, calculator sandbox, prompt, and fixtures remain available as a future execution-layer reference, but are not imported by Jaza Sentinel.
 
 Jaza still creates no database of its own. GuardThisKingdom remains an external evidence source; Jaza never duplicates its dataset into JSON. The local app has no authentication, background scheduler, cloud deployment, or autonomous shell loop. Deterministic reporting works without Luna; an OpenAI API key is needed only when the user explicitly generates an insight.
@@ -113,10 +113,10 @@ uv sync --dev
 uv run python main.py
 ```
 
-The local API starts at `http://127.0.0.1:5000`. Verify readiness with:
+The local API starts at `http://127.0.0.1:5001`. Verify readiness with:
 
 ```bash
-curl http://127.0.0.1:5000/api/health
+curl http://127.0.0.1:5001/api/health
 ```
 
 The existing local shortcut is also supported:
@@ -142,19 +142,44 @@ Angular 21 is used because it is supported and works with the local Homebrew Nod
 
 ```bash
 PATH="/opt/homebrew/opt/node@20/bin:$PATH" npm install
-PATH="/opt/homebrew/opt/node@20/bin:$PATH" npm start
+PATH="/opt/homebrew/opt/node@20/bin:$PATH" npm start -- --port 4201
 ```
 
-Open `http://localhost:4200`. Keep the Flask backend running in the other terminal.
+Open `http://localhost:4201`. Keep the Flask backend running in the other terminal.
 
 If your terminal is already at the repository root, use the root wrappers instead—there is no need to change directories:
 
 ```bash
 PATH="/opt/homebrew/opt/node@20/bin:$PATH" npm run frontend:install
-PATH="/opt/homebrew/opt/node@20/bin:$PATH" npm start
+PATH="/opt/homebrew/opt/node@20/bin:$PATH" npm --prefix frontend start -- --port 4201
 ```
 
-The root `npm start` delegates to `frontend/package.json`. An `ENOENT` for `/agentic-ai-agent/package.json` means the checkout predates this wrapper; in that case, `cd frontend` before running npm or update the checkout.
+The root package provides frontend wrappers; the explicit start command above passes port `4201` to the frontend's local Angular CLI. An `ENOENT` for `/agentic-ai-agent/package.json` means the checkout predates these wrappers; in that case, `cd frontend` before running npm or update the checkout.
+
+## Summon Jaza
+
+First-time setup, if dependencies have not been installed yet:
+
+```bash
+uv sync --dev
+cd frontend
+npm install
+```
+
+For normal daily startup from the repository:
+
+```bash
+cd ~/paladin/agentic-ai-agent
+./summon_jaza.sh
+```
+
+Or summon Jaza from any working directory:
+
+```bash
+~/paladin/agentic-ai-agent/summon_jaza.sh
+```
+
+The launcher starts the backend at `http://127.0.0.1:5001`, starts the frontend at `http://localhost:4201`, waits for both to become responsive, and opens the frontend in the default browser. Press `Ctrl+C` in the launcher terminal to stop both services. PyCharm does not need to be open.
 
 ## Verify
 

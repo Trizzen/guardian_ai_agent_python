@@ -18,7 +18,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--host", default=os.environ.get("JAZA_HOST", "127.0.0.1"))
     parser.add_argument(
         "--port",
-        default=int(os.environ.get("PORT", os.environ.get("JAZA_PORT", "5000"))),
+        default=int(os.environ.get("PORT", os.environ.get("JAZA_PORT", "5001"))),
         type=int,
     )
     parser.add_argument(
