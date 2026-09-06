@@ -48,6 +48,39 @@ class JsonStateRepository:
     def report_feedback(self) -> list[dict[str, Any]]:
         return self._optional_collection("sentinel.json", "report_feedback")
 
+    def coding_associations(self) -> dict[str, dict[str, Any]]:
+        with self._lock:
+            document = self._load_document("sentinel.json")
+            value = document.get("coding_associations", {})
+            return deepcopy(value) if isinstance(value, dict) else {}
+
+    def coding_association(self, jira_key: str) -> dict[str, Any]:
+        return self.coding_associations().get(jira_key, {})
+
+    def update_coding_association(
+        self, jira_key: str, values: dict[str, Any]
+    ) -> dict[str, Any]:
+        with self._lock:
+            document = self._load_document("sentinel.json")
+            associations = document.setdefault("coding_associations", {})
+            current = associations.get(jira_key, {})
+            current.update(deepcopy(values))
+            current["jira_key"] = jira_key
+            associations[jira_key] = current
+            self._write_document("sentinel.json", document)
+            return deepcopy(current)
+
+    def link_work_item_to_jira(self, item_id: str, jira_key: str) -> dict[str, Any] | None:
+        with self._lock:
+            document = self._load_document("sentinel.json")
+            for item in document["work_items"]:
+                if item.get("id") == item_id:
+                    item["jira_key"] = jira_key
+                    item["updated_at"] = datetime.now(UTC).isoformat()
+                    self._write_document("sentinel.json", document)
+                    return deepcopy(item)
+        return None
+
     def create_work_item(self, item: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
             document = self._load_document("sentinel.json")

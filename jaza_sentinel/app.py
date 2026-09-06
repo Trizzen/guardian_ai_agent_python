@@ -10,6 +10,8 @@ from typing import Any
 from flask import Flask, jsonify, request
 
 from .codex_pet import CodexPetConfigError, CodexPetController
+from .codex_runtime import CodexHandoffService, CodexRuntimeError, CodexUsageService
+from .integrations.jira import JiraClient, JiraCodingService, JiraIntegrationError
 from .reporting import ReportingService
 from .reporting.service import ReportingInputError
 from .storage import JsonStateRepository
@@ -30,6 +32,9 @@ def create_app(
     data_dir: Path | None = None,
     codex_config_path: Path | None = None,
     reporting_service: ReportingService | None = None,
+    jira_service: JiraCodingService | None = None,
+    codex_usage_service: CodexUsageService | None = None,
+    codex_handoff_service: CodexHandoffService | None = None,
 ) -> Flask:
     app = Flask(__name__)
     app.config["JSON_SORT_KEYS"] = False
@@ -43,9 +48,15 @@ def create_app(
     )
     pet_controller = CodexPetController(Path(app.config["JAZA_CODEX_CONFIG_PATH"]))
     reports = reporting_service or ReportingService(repository)
+    coding = jira_service or JiraCodingService(JiraClient(), repository)
+    codex_usage = codex_usage_service or CodexUsageService()
+    codex_handoff = codex_handoff_service or CodexHandoffService(repository)
     app.extensions["jaza_repository"] = repository
     app.extensions["jaza_pet_controller"] = pet_controller
     app.extensions["jaza_reporting_service"] = reports
+    app.extensions["jaza_jira_service"] = coding
+    app.extensions["jaza_codex_usage_service"] = codex_usage
+    app.extensions["jaza_codex_handoff_service"] = codex_handoff
 
     @app.errorhandler(RequestValidationError)
     def handle_validation_error(error: RequestValidationError):
@@ -53,7 +64,7 @@ def create_app(
 
     @app.get("/api/health")
     def health():
-        return jsonify({"status": "ok", "service": "jaza-sentinel", "version": "0.2.0"})
+        return jsonify({"status": "ok", "service": "jaza-sentinel", "version": "0.3.0"})
 
     @app.get("/api/sentinel/dashboard")
     def dashboard():
@@ -199,7 +210,87 @@ def create_app(
         except ReportingInputError as error:
             return jsonify({"error": "validation_error", "message": str(error)}), 400
 
+    @app.get("/api/coding/jira/board")
+    def coding_jira_board():
+        try:
+            payload = coding.board()
+            payload["codex_usage"] = codex_usage.current()
+            return jsonify(payload)
+        except JiraIntegrationError as error:
+            return _integration_error(error)
+
+    @app.post("/api/coding/jira/refresh")
+    def refresh_coding_jira():
+        try:
+            payload = coding.refresh(bootstrap=True)
+            payload["codex_usage"] = codex_usage.current()
+            return jsonify(payload)
+        except JiraIntegrationError as error:
+            return _integration_error(error)
+
+    @app.post("/api/coding/jira/issues")
+    def create_coding_jira_issue():
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict) or set(payload) - {"title", "description"}:
+            return jsonify(
+                {"error": "validation_error", "message": "Only title and description are accepted."}
+            ), 400
+        try:
+            story = coding.create_issue(
+                str(payload.get("title") or ""),
+                payload.get("description") if isinstance(payload.get("description"), str) else "",
+            )
+            return jsonify({"item": story}), 201
+        except JiraIntegrationError as error:
+            return _integration_error(error)
+
+    @app.get("/api/coding/jira/issues/<key>")
+    def coding_jira_issue(key: str):
+        try:
+            return jsonify({"item": coding.issue(key)})
+        except JiraIntegrationError as error:
+            return _integration_error(error)
+
+    @app.post("/api/coding/jira/issues/<key>/begin")
+    def begin_coding_jira_issue(key: str):
+        payload = request.get_json(silent=True)
+        payload = payload if isinstance(payload, dict) else {}
+        if set(payload) - {"local_project_id"}:
+            return jsonify(
+                {
+                    "error": "validation_error",
+                    "message": "Only a known Jaza local_project_id is accepted.",
+                }
+            ), 400
+        try:
+            if payload.get("local_project_id"):
+                coding.set_repository(key, str(payload["local_project_id"]))
+            story = coding.issue(key)
+            if not story.get("local_repository_path"):
+                return jsonify(
+                    {
+                        "error": "repository_required",
+                        "message": "Choose the Jaza project repository for this story.",
+                        "repositories": coding.known_repositories(),
+                    }
+                ), 409
+            story = coding.transition_to_in_progress(key)
+            handoff = codex_handoff.begin(story, str(story["local_repository_path"]))
+            return jsonify({"item": coding.issue(key), "handoff": handoff})
+        except JiraIntegrationError as error:
+            return _integration_error(error)
+        except CodexRuntimeError as error:
+            return jsonify({"error": error.code, "message": error.message}), error.status_code
+
+    @app.get("/api/coding/codex-usage")
+    def coding_codex_usage():
+        return jsonify(codex_usage.current())
+
     return app
+
+
+def _integration_error(error: JiraIntegrationError):
+    return jsonify({"error": error.code, "message": error.message}), error.status_code
 
 
 def _validate_target(repository: JsonStateRepository, item: dict[str, Any]):

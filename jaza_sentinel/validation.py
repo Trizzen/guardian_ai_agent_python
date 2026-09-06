@@ -103,6 +103,7 @@ def validate_work_item(
         "execution_status": "prepared_for_star" if assignee == "star_reborn" else "not_delegated",
         "scheduled_for": scheduled_for,
         "review_after": review_after,
+        "jira_key": (existing or {}).get("jira_key"),
     }
 
 

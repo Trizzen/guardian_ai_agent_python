@@ -428,6 +428,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "flask" },
+    { name = "httpx" },
     { name = "openai" },
     { name = "pydantic" },
     { name = "pymssql" },
@@ -449,6 +450,7 @@ dev = [
 requires-dist = [
     { name = "flask", specifier = ">=3.1,<4" },
     { name = "google-genai", marker = "extra == 'legacy-gemini'", specifier = "==1.12.1" },
+    { name = "httpx", specifier = ">=0.28,<1" },
     { name = "openai", specifier = ">=2.24,<3" },
     { name = "pydantic", specifier = ">=2.12,<3" },
     { name = "pymssql", specifier = ">=2.3,<3" },

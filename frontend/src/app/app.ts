@@ -8,6 +8,9 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import {
   Assignee,
   CheckInStatus,
+  CodingBoard,
+  CodingStory,
+  CodingStoryStatus,
   DomainReport,
   PetPresenceName,
   Priority,
@@ -94,6 +97,15 @@ export class AppComponent implements OnInit {
   reportError = '';
   feedbackSent: boolean | null = null;
   private reportRequestSequence = 0;
+  codingBoard: CodingBoard | null = null;
+  codingLoading = false;
+  codingError = '';
+  selectedStory: CodingStory | null = null;
+  storyLoading = false;
+  startingStory = '';
+  repositorySelections: Record<string, string> = {};
+  showJiraEditor = false;
+  jiraForm = { title: '', description: '' };
 
   captureKind: 'note' | 'check_in' = 'note';
   captureBody = '';
@@ -115,6 +127,9 @@ export class AppComponent implements OnInit {
     this.selection.next({ type, id });
     if (type === 'program') {
       this.loadReport(id);
+      if (id === 'coding-command') {
+        this.refreshCodingBoard();
+      }
     } else {
       this.report = null;
       this.reportError = '';
@@ -212,6 +227,129 @@ export class AppComponent implements OnInit {
     this.workForm = this.emptyWorkForm(type ?? selected.type, id ?? selected.id);
     this.formError = '';
     this.showWorkEditor = true;
+  }
+
+  openAddHere(type: TargetType, id: string): void {
+    if (type === 'program' && id === 'coding-command') {
+      this.jiraForm = { title: '', description: '' };
+      this.formError = '';
+      this.showJiraEditor = true;
+      return;
+    }
+    this.openAdd(type, id);
+  }
+
+  closeJiraEditor(): void {
+    if (!this.saving) {
+      this.showJiraEditor = false;
+    }
+  }
+
+  saveJiraStory(): void {
+    if (!this.jiraForm.title.trim() || !this.jiraForm.description.trim()) {
+      this.formError = 'Title and full description are required.';
+      return;
+    }
+    this.saving = true;
+    this.formError = '';
+    this.api
+      .createCodingStory(this.jiraForm.title, this.jiraForm.description)
+      .pipe(finalize(() => (this.saving = false)), takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: ({ item }) => {
+          this.showJiraEditor = false;
+          this.selectedStory = item;
+          this.flash(`${item.jira_key} created in Sprint 0.`);
+          this.refreshCodingBoard();
+        },
+        error: (error: HttpErrorResponse) => (this.formError = this.describeError(error)),
+      });
+  }
+
+  refreshCodingBoard(): void {
+    if (this.codingLoading) {
+      return;
+    }
+    this.codingLoading = true;
+    this.codingError = '';
+    this.api
+      .refreshCodingBoard()
+      .pipe(finalize(() => (this.codingLoading = false)), takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: (board) => {
+          this.codingBoard = board;
+          if (this.selectedStory) {
+            this.selectedStory =
+              board.stories.find((story) => story.jira_key === this.selectedStory?.jira_key) ??
+              this.selectedStory;
+          }
+          this.changeDetector.markForCheck();
+        },
+        error: (error: HttpErrorResponse) => {
+          this.codingBoard = null;
+          this.codingError = this.describeError(error);
+          this.changeDetector.markForCheck();
+        },
+      });
+  }
+
+  storiesFor(status: CodingStoryStatus): CodingStory[] {
+    return this.codingBoard?.stories.filter((story) => story.status === status) ?? [];
+  }
+
+  selectStory(story: CodingStory): void {
+    this.selectedStory = story;
+    this.storyLoading = true;
+    this.codingError = '';
+    this.api
+      .getCodingStory(story.jira_key)
+      .pipe(finalize(() => (this.storyLoading = false)), takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: ({ item }) => (this.selectedStory = item),
+        error: (error: HttpErrorResponse) => (this.codingError = this.describeError(error)),
+      });
+  }
+
+  beginStory(story: CodingStory): void {
+    if (story.status === 'in_review' || story.status === 'done' || this.startingStory) {
+      return;
+    }
+    const localProjectId = story.local_project_id || this.repositorySelections[story.jira_key];
+    if (!story.local_repository_path && !localProjectId) {
+      this.selectedStory = story;
+      this.codingError = 'Choose a known Jaza repository before beginning this story.';
+      return;
+    }
+    this.startingStory = story.jira_key;
+    this.codingError = '';
+    this.api
+      .beginCodingStory(story.jira_key, localProjectId || undefined)
+      .pipe(
+        finalize(() => {
+          this.startingStory = '';
+          this.changeDetector.markForCheck();
+        }),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe({
+        next: ({ item }) => {
+          this.selectedStory = item;
+          if (this.codingBoard) {
+            this.codingBoard = {
+              ...this.codingBoard,
+              stories: this.codingBoard.stories.map((current) =>
+                current.jira_key === item.jira_key ? item : current,
+              ),
+            };
+          }
+          this.flash(`${item.jira_key} handed to Codex.`);
+          this.changeDetector.markForCheck();
+        },
+        error: (error: HttpErrorResponse) => {
+          this.codingError = this.describeError(error);
+          this.changeDetector.markForCheck();
+        },
+      });
   }
 
   openEdit(item: WorkItem): void {

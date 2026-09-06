@@ -40,6 +40,10 @@ frontend/dist/
 frontend/.angular/
 frontend/coverage/
 
+# Local launcher logs
+
+.runtime/
+
 # IDE/editor
 
 .idea/

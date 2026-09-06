@@ -254,7 +254,21 @@
             <h2>{{ vm.selectedEntity?.name }}</h2>
             <p>{{ vm.selectedEntity?.description }}</p>
           </div>
-          <button type="button" class="secondary-action" (click)="openAdd(vm.selected.type, vm.selected.id)">＋ Add here</button>
+          <div class="focus-actions">
+            @if (vm.selected.type === 'program' && vm.selected.id === 'coding-command') {
+              <div class="codex-usage" aria-label="Codex five-hour usage">
+                <strong>Codex 5h</strong>
+                @if (codingBoard?.codex_usage?.available) {
+                  <span>{{ codingBoard?.codex_usage?.used_percent | number: '1.0-0' }}% used · {{ codingBoard?.codex_usage?.remaining_percent | number: '1.0-0' }}% remaining</span>
+                  @if (codingBoard?.codex_usage?.resets_at) { <small>Resets {{ codingBoard?.codex_usage?.resets_at | date: 'shortTime' }}</small> }
+                } @else {
+                  <span>Usage unavailable</span>
+                }
+              </div>
+              <button type="button" class="secondary-action" [disabled]="codingLoading" (click)="refreshCodingBoard()">{{ codingLoading ? 'Refreshing…' : 'Refresh' }}</button>
+            }
+            <button type="button" class="secondary-action" (click)="openAddHere(vm.selected.type, vm.selected.id)">＋ Add here</button>
+          </div>
         </div>
 
         @if (asProject(vm.selectedEntity); as project) {
@@ -341,7 +355,55 @@
                       }
                     </div>
 
-                    @if (report.planning_context.active_projects?.length || report.planning_context.work_items?.length) {
+                    @if (vm.selected.id === 'coding-command') {
+                      <div class="planning-separation jira-planning">
+                        <div class="jira-board-heading">
+                          <div><span>Jaza planning state · Jira authoritative</span><strong>{{ codingBoard?.sprint?.name || 'Sprint 0' }}</strong></div>
+                          @if (codingBoard) { <small>{{ codingBoard.stories.length }} stories · backlog excluded</small> }
+                        </div>
+                        @if (codingError) { <p class="report-error">{{ codingError }}</p> }
+                        @if (codingLoading && !codingBoard) {
+                          <div class="report-loading">Refreshing Jira Sprint 0…</div>
+                        } @else if (codingBoard) {
+                          <div class="jira-board">
+                            @for (column of codingBoard.statuses; track column.id) {
+                              <section class="jira-column">
+                                <div class="jira-column-title"><span>{{ column.label }}</span><b>{{ storiesFor(column.id).length }}</b></div>
+                                @for (story of storiesFor(column.id); track story.jira_key) {
+                                  <article class="jira-card" [class.selected]="selectedStory?.jira_key === story.jira_key">
+                                    <button type="button" class="jira-story-open" (click)="selectStory(story)">
+                                      <small>{{ story.jira_key }}</small><strong>{{ story.summary }}</strong>
+                                      <span>{{ story.assignee || 'Unassigned' }}</span>
+                                    </button>
+                                    <button type="button" class="begin-action" [disabled]="story.status === 'in_review' || story.status === 'done' || !!startingStory" (click)="beginStory(story)">{{ startingStory === story.jira_key ? 'Starting…' : 'Begin' }}</button>
+                                  </article>
+                                } @empty { <p class="jira-empty">No stories</p> }
+                              </section>
+                            }
+                          </div>
+                          @if (selectedStory; as story) {
+                            <section class="jira-detail">
+                              <div class="jira-detail-heading">
+                                <div><small>{{ story.jira_key }} · {{ displayLabel(story.status) }}</small><h4>{{ story.summary }}</h4></div>
+                                <button type="button" class="begin-action" [disabled]="story.status === 'in_review' || story.status === 'done' || !!startingStory" (click)="beginStory(story)">{{ startingStory === story.jira_key ? 'Starting…' : 'Begin' }}</button>
+                              </div>
+                              <div class="jira-metadata"><span>Assignee: {{ story.assignee || 'Unassigned' }}</span><span>Sprint: {{ story.sprint }}</span>@if (story.priority) { <span>Priority: {{ story.priority }}</span> }</div>
+                              @if (!story.local_repository_path && codingBoard.repositories.length) {
+                                <label class="repository-choice">Repository required
+                                  <select [(ngModel)]="repositorySelections[story.jira_key]">
+                                    <option value="">Choose a known project…</option>
+                                    @for (repository of codingBoard.repositories; track repository.id) { <option [value]="repository.id">{{ repository.name }}</option> }
+                                  </select>
+                                </label>
+                              } @else if (story.local_repository_path) { <small class="repository-path">Repository: {{ story.local_repository_path }}</small> }
+                              <div class="jira-description"><span>Full description</span><pre>{{ story.description || 'No description supplied.' }}</pre></div>
+                            </section>
+                          }
+                        } @else {
+                          <div class="report-unavailable"><strong>Jira unavailable</strong><p>{{ codingError || 'Sprint 0 could not be loaded. Existing Sentinel features remain available.' }}</p></div>
+                        }
+                      </div>
+                    } @else if (report.planning_context.active_projects?.length || report.planning_context.work_items?.length) {
                       <div class="planning-separation">
                         <span>Jaza planning state</span>
                         @for (project of report.planning_context.active_projects || []; track project.id) {
@@ -494,8 +556,8 @@
     </main>
 
     <footer>
-      <span>Jaza Sentinel v0.2</span>
-      <span>Human-in-the-loop · GTK read-only evidence · No autonomous execution</span>
+      <span>Jaza Sentinel v0.3</span>
+      <span>Human-in-the-loop · GTK read-only evidence · No autonomous execution · Bounded Codex handoff</span>
     </footer>
   } @else {
     <div class="loading-screen">
@@ -585,6 +647,26 @@
         <div class="modal-actions">
           <button type="button" class="secondary-action" (click)="closeWorkEditor()">Cancel</button>
           <button type="submit" class="primary-action" [disabled]="saving">{{ saving ? 'Securing…' : 'Save to Jaza' }}</button>
+        </div>
+      </form>
+    </section>
+  </div>
+}
+
+@if (showJiraEditor) {
+  <div class="modal-backdrop" (click)="closeJiraEditor()">
+    <section class="work-modal" role="dialog" aria-modal="true" aria-labelledby="jira-editor-title" (click)="$event.stopPropagation()">
+      <div class="modal-header">
+        <div><p class="eyebrow">Sprint 0 intake</p><h2 id="jira-editor-title">Add Jira Story</h2></div>
+        <button type="button" class="close-action" aria-label="Close" (click)="closeJiraEditor()">×</button>
+      </div>
+      <form (ngSubmit)="saveJiraStory()">
+        <label class="wide-field">Title <span>required</span><input name="jiraTitle" maxlength="255" [(ngModel)]="jiraForm.title" autofocus /></label>
+        <label class="wide-field">Full description <span>required</span><textarea name="jiraDescription" rows="14" [(ngModel)]="jiraForm.description" placeholder="Paste the complete approved Codex specification. It will not be summarized."></textarea></label>
+        @if (formError) { <div class="form-error">{{ formError }}</div> }
+        <div class="modal-actions">
+          <button type="button" class="secondary-action" (click)="closeJiraEditor()">Cancel</button>
+          <button type="submit" class="primary-action" [disabled]="saving">{{ saving ? 'Creating…' : 'Create in Jira' }}</button>
         </div>
       </form>
     </section>

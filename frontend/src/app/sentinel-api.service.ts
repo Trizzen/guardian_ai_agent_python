@@ -4,6 +4,8 @@ import { BehaviorSubject, Observable, forkJoin } from 'rxjs';
 import { map, shareReplay, switchMap, tap } from 'rxjs/operators';
 
 import {
+  CodingBoard,
+  CodingStory,
   ContextEntry,
   Dashboard,
   DomainReport,
@@ -116,5 +118,27 @@ export class SentinelApiService {
 
   recordReportFeedback(payload: Record<string, unknown>): Observable<ItemResponse<unknown>> {
     return this.http.post<ItemResponse<unknown>>('/api/reporting/feedback', payload);
+  }
+
+  refreshCodingBoard(): Observable<CodingBoard> {
+    return this.http.post<CodingBoard>('/api/coding/jira/refresh', {});
+  }
+
+  createCodingStory(title: string, description: string): Observable<ItemResponse<CodingStory>> {
+    return this.http.post<ItemResponse<CodingStory>>('/api/coding/jira/issues', { title, description });
+  }
+
+  getCodingStory(key: string): Observable<ItemResponse<CodingStory>> {
+    return this.http.get<ItemResponse<CodingStory>>(`/api/coding/jira/issues/${key}`);
+  }
+
+  beginCodingStory(
+    key: string,
+    localProjectId?: string,
+  ): Observable<{ item: CodingStory; handoff: Record<string, unknown> }> {
+    return this.http.post<{ item: CodingStory; handoff: Record<string, unknown> }>(
+      `/api/coding/jira/issues/${key}/begin`,
+      localProjectId ? { local_project_id: localProjectId } : {},
+    );
   }
 }

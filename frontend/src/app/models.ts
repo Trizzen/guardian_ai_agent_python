@@ -49,6 +49,52 @@ export interface WorkItem {
   scheduled_for: string | null;
   review_after: string | null;
   attention_at?: string;
+  jira_key?: string | null;
+}
+
+export type CodingStoryStatus = 'to_do' | 'in_progress' | 'in_review' | 'done';
+
+export interface CodingRepository {
+  id: string;
+  name: string;
+  repository_path: string;
+}
+
+export interface CodexUsage {
+  available: boolean;
+  window_minutes: number;
+  used_percent: number | null;
+  remaining_percent: number | null;
+  resets_at: string | null;
+  message: string | null;
+  source: string;
+}
+
+export interface CodingStory {
+  jira_key: string;
+  summary: string;
+  description: string;
+  status: CodingStoryStatus;
+  assignee: string | null;
+  priority: string | null;
+  sprint: string | null;
+  issue_type: string | null;
+  local_project_id: string | null;
+  local_repository_path: string | null;
+  codex_thread_id: string | null;
+  execution_state: string;
+}
+
+export interface CodingBoard {
+  available: boolean;
+  project: { key: string; name: string };
+  sprint: { id: number; name: string; state: string };
+  statuses: { id: CodingStoryStatus; label: string }[];
+  stories: CodingStory[];
+  repositories: CodingRepository[];
+  refreshed_at: string;
+  bootstrapped?: { local_work_item_id: string; jira_key: string }[];
+  codex_usage: CodexUsage;
 }
 
 export interface ContextEntry {

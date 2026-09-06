@@ -2,7 +2,7 @@
 
 Jaza Sentinel is King Trizzen's local, human-in-the-loop command center. Jaza Soulminder manages the bigger picture: programs, software projects, priorities, goals and tasks, notes, checkpoints, scheduled reviews, and lightweight AI/tool usage records.
 
-Version 0.2 is deliberately an observational intelligence control plane, not an unrestricted autonomous agent. It runs locally, stores readable Jaza state in JSON, reads GuardThisKingdom evidence without modifying it, and makes every Star Reborn handoff explicit without pretending an execution runtime exists.
+Version 0.3 remains a human-directed intelligence control plane, not an unrestricted autonomous agent. It runs locally, stores readable Jaza state in JSON, reads GuardThisKingdom evidence without modifying it, and adds a narrow Coding Command bridge from Jira Sprint 0 to the supported Codex CLI.
 
 ## Architecture
 
@@ -104,6 +104,8 @@ Copy `.env.example` to the ignored `.env` only when configuring a new checkout. 
 
 The current local ignored `.env` contains only pointers to the existing GTK and MenuShield environment files plus non-secret model/cache settings. It contains no copied key or database URI.
 
+Coding Command reads the existing Jira variables `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`, and `JIRA_PROJECT_KEY`. Credentials remain backend-only. Jira owns Sprint 0 story content and workflow state; Jaza JSON stores only local work-item links, repository selection, and Codex thread/handoff metadata. Codex five-hour usage comes from the structured App Server `account/rateLimits/read` response, and Begin invokes only the allowlisted `codex exec --json` / `codex exec resume --json` commands against configured project repositories.
+
 ## Run the backend
 
 From the repository root:
@@ -135,6 +137,15 @@ Useful reporting endpoints are:
 - `POST /api/reporting/feedback`
 
 There is intentionally no route parameter for a GTK user ID.
+
+Coding Command endpoints are:
+
+- `GET /api/coding/jira/board`
+- `POST /api/coding/jira/refresh`
+- `POST /api/coding/jira/issues`
+- `GET /api/coding/jira/issues/<key>`
+- `POST /api/coding/jira/issues/<key>/begin`
+- `GET /api/coding/codex-usage`
 
 ## Run the Angular frontend
 
@@ -213,6 +224,8 @@ PATH="/opt/homebrew/opt/node@20/bin:$PATH" npm test
 - Read-only GTK status and deterministic reporting inside every Command Domain.
 - On-demand, structured Luna insights with facts/interpretation separation, cache control, provenance, and feedback.
 - Combined Coding Projects reports that label Jaza JSON as planning state and GTK as historical/activity evidence.
+- Jira-backed Sprint 0 board columns, full story details, Jira story intake, idempotent local-item bootstrap, and bounded Codex Begin/resume handoff.
+- Exact Codex five-hour usage and reset metadata when the supported local App Server exposes it; otherwise an explicit unavailable state.
 
 ## Codex pet presence
 
@@ -230,10 +243,10 @@ Committed seeds live in `data/defaults/*.json`. On first start, Jaza copies them
 
 Never place API keys, credentials, financial account data, or other secrets in Sentinel JSON. Financial and budget domains are planning surfaces only; there are no financial integrations.
 
-## Intentional v0.2 limits
+## Intentional v0.3 limits
 
 - No autonomous scheduling daemon. Timestamps are stored and surfaced only.
-- No worker process, shell control, background coding loop, or result-ingestion contract.
+- No generic worker process, arbitrary shell control, autonomous background coding loop, or result-ingestion contract. Coding Command may invoke only the constructed, repository-allowlisted Codex handoff command.
 - No automatic Codex/provider telemetry. Usage entries are manual.
 - No multi-user support or authentication; the application binds to localhost by default.
 - No database or migration path; JSON is the intentional local persistence contract.
