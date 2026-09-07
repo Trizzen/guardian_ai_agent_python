@@ -9,6 +9,7 @@ from typing import Any
 
 from flask import Flask, jsonify, request
 
+from .begin_diagnostics import log_begin
 from .codex_pet import CodexPetConfigError, CodexPetController
 from .codex_runtime import CodexHandoffService, CodexRuntimeError, CodexUsageService
 from .integrations.jira import JiraClient, JiraCodingService, JiraIntegrationError
@@ -255,7 +256,9 @@ def create_app(
     def begin_coding_jira_issue(key: str):
         payload = request.get_json(silent=True)
         payload = payload if isinstance(payload, dict) else {}
+        log_begin(key, local_project_id=payload.get("local_project_id"))
         if set(payload) - {"local_project_id"}:
+            log_begin(key, repository_validation="failed", launch="failed", error_code="validation_error")
             return jsonify(
                 {
                     "error": "validation_error",
@@ -267,6 +270,7 @@ def create_app(
                 coding.set_repository(key, str(payload["local_project_id"]))
             story = coding.issue(key)
             if not story.get("local_repository_path"):
+                log_begin(key, repository_validation="failed", launch="failed", error_code="repository_required")
                 return jsonify(
                     {
                         "error": "repository_required",
@@ -278,6 +282,9 @@ def create_app(
             handoff = codex_handoff.begin(story, str(story["local_repository_path"]))
             return jsonify({"item": coding.issue(key), "handoff": handoff})
         except JiraIntegrationError as error:
+            log_begin(key, launch="failed", error_code=error.code, **(
+                {"repository_validation": "failed"} if error.code == "repository_not_allowlisted" else {}
+            ))
             return _integration_error(error)
         except CodexRuntimeError as error:
             return jsonify({"error": error.code, "message": error.message}), error.status_code

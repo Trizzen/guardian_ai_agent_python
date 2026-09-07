@@ -200,9 +200,10 @@ def test_codex_prompt_contains_key_summary_and_unmodified_full_description():
     assert prompt.endswith(description)
 
 
-def test_existing_codex_thread_uses_supported_resume_command(repository):
+def test_existing_codex_thread_uses_supported_resume_command(repository, tmp_path):
+    (tmp_path / ".git").mkdir()
     service = CodexHandoffService(repository, executable="/known/codex")
-    assert service._command(Path("/allowlisted"), "thread-123") == [
+    assert service._command(tmp_path, "thread-123") == [
         "/known/codex", "exec", "resume", "--json", "thread-123", "-"
     ]
 
@@ -227,7 +228,7 @@ def test_five_hour_usage_parses_real_app_server_shape_and_missing_is_unavailable
     assert parsed["used_percent"] == 62
     assert parsed["remaining_percent"] == 38
     assert parsed["window_minutes"] == 300
-    monkeypatch.setattr("shutil.which", lambda _: None)
+    monkeypatch.setattr("jaza_sentinel.codex_runtime.resolve_codex_executable", lambda: "")
     assert CodexUsageService(executable="").current()["message"] == "5h usage unavailable"
 
 
@@ -268,3 +269,151 @@ def test_routes_reject_arbitrary_commands_and_preserve_full_description(tmp_path
     created = client.post("/api/coding/jira/issues", json={"title": "T", "description": full})
     assert created.status_code == 201
     assert created.get_json()["item"]["description"] == full
+
+
+@pytest.fixture
+def paladin(tmp_path, monkeypatch):
+    root = tmp_path / "paladin"
+    root.mkdir()
+    (root / "gtkportal2").mkdir()
+    (root / "ignored").mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (root / "escape").symlink_to(outside, target_is_directory=True)
+    (root / "ignored-alias").symlink_to(root / "ignored", target_is_directory=True)
+    (root / "plain-file").touch()
+    (root / "gtkportal2" / "nested").mkdir()
+    ignore = tmp_path / "ignore.json"
+    ignore.write_text('{"ignored_folders": ["ignored"]}')
+    monkeypatch.setattr("jaza_sentinel.repositories.PALADIN_ROOT", root)
+    monkeypatch.setattr("jaza_sentinel.repositories.REPOSITORY_IGNORE_FILE", ignore)
+    return root
+
+
+def fake_launch(monkeypatch, events, exit_code=None):
+    import io
+    import json
+    calls = []
+
+    class Prompt(io.StringIO):
+        def close(self):
+            self.sent = self.getvalue()
+            super().close()
+
+    class Process:
+        stdin = Prompt()
+        terminated = False
+
+        def poll(self):
+            return exit_code
+
+        def terminate(self):
+            self.terminated = True
+
+    process = Process()
+
+    def popen(command, **kwargs):
+        calls.append((command, kwargs))
+        for event in events:
+            kwargs["stdout"].write(json.dumps(event) + "\n")
+        kwargs["stdout"].flush()
+        return process
+
+    monkeypatch.setattr("jaza_sentinel.codex_runtime.subprocess.Popen", popen)
+    return calls, process
+
+
+def test_discovered_repository_shared_by_jira_and_codex(repository, jira, paladin, monkeypatch, tmp_path, caplog):
+    service, _ = jira
+    assert service.set_repository("SCRUM-1", "gtkportal2")["repository_path"] == str(paladin / "gtkportal2")
+    story = service.issue("SCRUM-1")
+    calls, process = fake_launch(monkeypatch, [{"type": "thread.started", "thread_id": "real-event-id"}])
+    handoff = CodexHandoffService(repository, executable="/known/codex", log_dir=tmp_path / "logs")
+    result = handoff.begin(story, story["local_repository_path"])
+    assert result["codex_thread_id"] == "real-event-id"
+    assert repository.coding_association("SCRUM-1")["execution_state"] == "running"
+    assert repository.coding_association("SCRUM-1")["codex_thread_id"] == "real-event-id"
+    assert calls[0][0] == ["/known/codex", "exec", "--json", "--sandbox", "workspace-write", "--cd", str(paladin / "gtkportal2"), "--skip-git-repo-check", "-"]
+    assert calls[0][1]["cwd"] == paladin / "gtkportal2"
+    assert process.stdin.sent == handoff._prompt(story)
+    assert 'repository_validation="passed"' in caplog.text
+    assert 'launch="confirmed" thread_id="real-event-id"' in caplog.text
+    assert story["description"] not in caplog.text
+    calls, _ = fake_launch(monkeypatch, [{"type": "thread.started", "thread_id": "real-event-id"}])
+    assert handoff.begin(story, story["local_repository_path"])["resumed"] is True
+    assert calls[0][0] == ["/known/codex", "exec", "resume", "--json", "--skip-git-repo-check", "real-event-id", "-"]
+
+
+@pytest.mark.parametrize("folder", ["../outside", "ignored", "escape", "ignored-alias", "plain-file", "gtkportal2/nested", "missing"])
+def test_shared_repository_boundary(repository, jira, paladin, monkeypatch, folder, caplog):
+    # Even explicitly configured projects cannot bypass the boundary or ignore list.
+    monkeypatch.setattr(repository, "projects", lambda: [{"id": "unsafe", "name": "Unsafe", "repository_path": str(paladin / folder)}])
+    service, _ = jira
+    with pytest.raises(JiraIntegrationError) as error:
+        service.set_repository("SCRUM-1", "unsafe")
+    assert error.value.code == "repository_not_allowlisted"
+    runtime = CodexHandoffService(repository, executable="/known/codex")
+    with pytest.raises(CodexRuntimeError) as error:
+        runtime.begin({"jira_key": "SCRUM-1"}, str(paladin / folder))
+    assert error.value.code == "repository_not_allowlisted"
+    assert 'repository_validation="failed"' in caplog.text
+    assert 'launch="attempted"' not in caplog.text
+
+
+@pytest.mark.parametrize("events,exit_code,error_code", [
+    ([{"type": "error", "message": "secret must not be logged"}], 1, "codex_launch_failed"),
+    ([], 1, "codex_launch_failed"),
+    ([], None, "codex_launch_unconfirmed"),
+    ([{"type": "thread.started"}], None, "codex_launch_unconfirmed"),
+])
+def test_no_fake_running_state(repository, paladin, monkeypatch, tmp_path, events, exit_code, error_code, caplog):
+    calls, process = fake_launch(monkeypatch, events, exit_code)
+    ticks = iter([0, 1, 11])
+    monkeypatch.setattr("jaza_sentinel.codex_runtime.monotonic", lambda: next(ticks))
+    monkeypatch.setattr("jaza_sentinel.codex_runtime.sleep", lambda _: None)
+    runtime = CodexHandoffService(repository, executable="/known/codex", log_dir=tmp_path / "logs")
+    with pytest.raises(CodexRuntimeError) as error:
+        runtime.begin({"jira_key": "SCRUM-1", "summary": "Test", "description": "Private spec"}, str(paladin / "gtkportal2"))
+    assert error.value.code == error_code
+    association = repository.coding_association("SCRUM-1")
+    assert association["execution_state"] == "failed"
+    assert not association.get("codex_thread_id")
+    assert 'launch="confirmed"' not in caplog.text
+    assert 'launch="failed"' in caplog.text
+    assert "secret must not be logged" not in caplog.text
+    if error_code == "codex_launch_unconfirmed":
+        assert process.terminated
+
+
+def test_begin_route_keeps_safe_json_error(repository, jira, paladin, tmp_path, caplog):
+    service, _ = jira
+    app = create_app(data_dir=tmp_path / "app-state", jira_service=service,
+                     codex_handoff_service=CodexHandoffService(repository, executable="/missing/codex", log_dir=tmp_path / "logs"))
+    response = app.test_client().post("/api/coding/jira/issues/SCRUM-1/begin", json={"local_project_id": "gtkportal2"})
+    assert response.status_code == 503
+    assert response.get_json() == {"error": "codex_launch_failed", "message": "Codex could not be launched."}
+    assert repository.coding_association("SCRUM-1")["execution_state"] == "failed"
+    assert 'error_code="codex_launch_failed"' in caplog.text
+
+
+def test_fresh_git_repository_keeps_original_command(repository, tmp_path):
+    (tmp_path / ".git").mkdir()
+    runtime = CodexHandoffService(repository, executable="/known/codex")
+    assert runtime._command(tmp_path, None) == [
+        "/known/codex", "exec", "--json", "--sandbox", "workspace-write", "--cd", str(tmp_path), "-"
+    ]
+
+
+def test_codex_resolution_prefers_current_app_and_falls_back_to_path(monkeypatch, tmp_path):
+    from jaza_sentinel.codex_runtime import resolve_codex_executable
+    bundled = tmp_path / "codex"
+    monkeypatch.setattr("jaza_sentinel.codex_runtime.BUNDLED_CODEX", bundled)
+    monkeypatch.setattr("shutil.which", lambda _: "/path/codex")
+    assert resolve_codex_executable() == "/path/codex"
+    bundled.write_text("test executable")
+    bundled.chmod(0o755)
+    assert resolve_codex_executable() == str(bundled)
+    bundled.chmod(0o644)
+    assert resolve_codex_executable() == "/path/codex"
+    monkeypatch.setattr("shutil.which", lambda _: None)
+    assert resolve_codex_executable() == ""

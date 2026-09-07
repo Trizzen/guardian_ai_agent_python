@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import select
 import shutil
 import subprocess
@@ -12,6 +13,18 @@ from time import monotonic, sleep
 from typing import Any
 
 from .storage import JsonStateRepository
+from .repositories import known_repositories
+from .begin_diagnostics import log_begin
+
+
+BUNDLED_CODEX = Path("/Applications/ChatGPT.app/Contents/Resources/codex")
+
+
+def resolve_codex_executable() -> str:
+    # Use the current app's CLI before a stale standalone installation on PATH.
+    if BUNDLED_CODEX.is_file() and os.access(BUNDLED_CODEX, os.X_OK):
+        return str(BUNDLED_CODEX)
+    return shutil.which("codex") or ""
 
 
 class CodexRuntimeError(RuntimeError):
@@ -26,7 +39,7 @@ class CodexUsageService:
     """Read official App Server rate-limit state; never infer usage."""
 
     def __init__(self, executable: str | None = None) -> None:
-        self.executable = executable or shutil.which("codex") or ""
+        self.executable = executable or resolve_codex_executable()
 
     def current(self) -> dict[str, Any]:
         unavailable = {
@@ -144,33 +157,39 @@ class CodexHandoffService:
         log_dir: Path | None = None,
     ) -> None:
         self.local = repository
-        self.executable = executable or shutil.which("codex") or ""
+        self.executable = executable or resolve_codex_executable()
         self.log_dir = log_dir or Path(__file__).resolve().parents[1] / ".runtime" / "codex-handoffs"
 
     def begin(self, story: dict[str, Any], repository_path: str) -> dict[str, Any]:
-        if not self.executable:
-            raise CodexRuntimeError("codex_unavailable", "The supported Codex CLI is unavailable.")
+        key = str(story["jira_key"])
         resolved = Path(repository_path).expanduser().resolve()
-        allowed = {
-            Path(item["repository_path"]).expanduser().resolve()
-            for item in self.local.projects()
-            if item.get("repository_path")
-        }
-        if resolved not in allowed or not resolved.is_dir():
+        allowed = {Path(item["repository_path"]) for item in known_repositories(self.local)}
+        valid = resolved in allowed and resolved.is_dir()
+        log_begin(
+            key, local_project_id=story.get("local_project_id"),
+            repository_path=str(resolved),
+            repository_validation="passed" if valid else "failed",
+            codex_executable=self.executable or "unavailable",
+        )
+        if not valid:
+            log_begin(key, launch="failed", error_code="repository_not_allowlisted")
             raise CodexRuntimeError(
                 "repository_not_allowlisted",
-                "The repository must be one of Jaza's configured software projects.",
+                "Choose one of Jaza's known Paladin repositories.",
                 status_code=400,
             )
-        key = str(story["jira_key"])
+        if not self.executable:
+            log_begin(key, launch="failed", error_code="codex_unavailable")
+            raise CodexRuntimeError("codex_unavailable", "The supported Codex CLI is unavailable.")
         association = self.local.coding_association(key)
         thread_id = association.get("codex_thread_id")
         prompt = self._prompt(story)
         command = self._command(resolved, str(thread_id) if thread_id else None)
         resumed = bool(thread_id)
-        self.log_dir.mkdir(parents=True, exist_ok=True)
         log_path = self.log_dir / f"{key.lower()}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.jsonl"
+        log_begin(key, launch="attempted")
         try:
+            self.log_dir.mkdir(parents=True, exist_ok=True)
             with log_path.open("w", encoding="utf-8") as log:
                 process = subprocess.Popen(
                     command,
@@ -186,6 +205,8 @@ class CodexHandoffService:
             process.stdin.write(prompt)
             process.stdin.close()
         except OSError as exc:
+            self.local.update_coding_association(key, {"execution_state": "failed"})
+            log_begin(key, launch="failed", error_code="codex_launch_failed")
             raise CodexRuntimeError("codex_launch_failed", "Codex could not be launched.") from exc
         launch_thread_id = thread_id
         launch_error: str | None = None
@@ -215,9 +236,11 @@ class CodexHandoffService:
                 break
             sleep(0.1)
         if launch_error:
+            log_begin(key, launch="failed", error_code="codex_launch_failed")
             self.local.update_coding_association(key, {"execution_state": "failed"})
             raise CodexRuntimeError("codex_launch_failed", launch_error)
         if not confirmed or not launch_thread_id:
+            log_begin(key, launch="failed", error_code="codex_launch_unconfirmed")
             process.terminate()
             self.local.update_coding_association(key, {"execution_state": "failed"})
             raise CodexRuntimeError("codex_launch_unconfirmed", "Codex did not confirm the handoff.")
@@ -231,6 +254,7 @@ class CodexHandoffService:
                 "repository_path": str(resolved),
             },
         )
+        log_begin(key, launch="confirmed", thread_id=thread_id)
         return {
             "jira_key": key,
             "execution_state": "running",
@@ -250,8 +274,11 @@ class CodexHandoffService:
         )
 
     def _command(self, repository_path: Path, thread_id: str | None) -> list[str]:
+        # Paladin also contains project containers (for example gtkportal2).
+        # begin() authorizes the directory before this narrowly scoped CLI opt-in.
+        git_options = [] if (repository_path / ".git").exists() else ["--skip-git-repo-check"]
         if thread_id:
-            return [self.executable, "exec", "resume", "--json", thread_id, "-"]
+            return [self.executable, "exec", "resume", "--json", *git_options, thread_id, "-"]
         return [
             self.executable,
             "exec",
@@ -260,5 +287,6 @@ class CodexHandoffService:
             "workspace-write",
             "--cd",
             str(repository_path),
+            *git_options,
             "-",
         ]
