@@ -1,15 +1,15 @@
-"""Supported, allowlisted Codex CLI handoff and structured 5-hour usage reads."""
+"""Supported Codex launch surfaces and structured 5-hour usage reads."""
 
 from __future__ import annotations
 
 import json
 import os
 import select
+import shlex
 import shutil
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
-from time import monotonic, sleep
 from typing import Any
 
 from .storage import JsonStateRepository
@@ -18,6 +18,19 @@ from .begin_diagnostics import log_begin
 
 
 BUNDLED_CODEX = Path("/Applications/ChatGPT.app/Contents/Resources/codex")
+EXECUTION_SURFACES = ("APP", "TERMINAL")
+EXECUTION_STATES = (
+    "prepared",
+    "running",
+    "completed",
+    "failed",
+    "stopped",
+    "awaiting_human_review",
+)
+# The bundled Codex CLI exposes --model and config overrides.  This identifier is
+# deliberately specified on every Sentinel launch instead of inheriting a prior
+# Desktop/CLI selection.
+DEFAULT_EXECUTION_PROFILE = {"model": "gpt-5.6-terra", "reasoning_effort": "high"}
 
 
 def resolve_codex_executable() -> str:
@@ -147,21 +160,40 @@ class CodexUsageService:
 
 
 class CodexHandoffService:
-    """Launch exactly `codex exec --json` or its supported resume form."""
+    """Prepare only visible, human-controlled Codex launch surfaces.
+
+    This service deliberately never starts ``codex exec``.  APP opens a
+    workspace and puts the exact prompt on the clipboard; TERMINAL asks macOS
+    Terminal to run an interactive, inline Codex session.  Neither launcher is
+    evidence that an agent has started, so both begin as ``prepared``.
+    """
 
     def __init__(
         self,
         repository: JsonStateRepository,
         *,
         executable: str | None = None,
-        log_dir: Path | None = None,
     ) -> None:
         self.local = repository
         self.executable = executable or resolve_codex_executable()
-        self.log_dir = log_dir or Path(__file__).resolve().parents[1] / ".runtime" / "codex-handoffs"
 
-    def begin(self, story: dict[str, Any], repository_path: str) -> dict[str, Any]:
+    @staticmethod
+    def validate_surface(surface: object) -> str:
+        if surface not in EXECUTION_SURFACES:
+            raise CodexRuntimeError(
+                "invalid_execution_surface",
+                "Choose APP (Codex Desktop) or TERMINAL (visible Codex CLI).",
+                status_code=400,
+            )
+        return str(surface)
+
+    @staticmethod
+    def execution_profile() -> dict[str, str]:
+        return dict(DEFAULT_EXECUTION_PROFILE)
+
+    def begin(self, story: dict[str, Any], repository_path: str, surface: object) -> dict[str, Any]:
         key = str(story["jira_key"])
+        selected_surface = self.validate_surface(surface)
         resolved = Path(repository_path).expanduser().resolve()
         allowed = {Path(item["repository_path"]) for item in known_repositories(self.local)}
         valid = resolved in allowed and resolved.is_dir()
@@ -181,85 +213,59 @@ class CodexHandoffService:
         if not self.executable:
             log_begin(key, launch="failed", error_code="codex_unavailable")
             raise CodexRuntimeError("codex_unavailable", "The supported Codex CLI is unavailable.")
-        association = self.local.coding_association(key)
-        thread_id = association.get("codex_thread_id")
         prompt = self._prompt(story)
-        command = self._command(resolved, str(thread_id) if thread_id else None)
-        resumed = bool(thread_id)
-        log_path = self.log_dir / f"{key.lower()}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.jsonl"
-        log_begin(key, launch="attempted")
+        profile = self.execution_profile()
+        timestamp = datetime.now(UTC).isoformat()
+        log_begin(
+            key,
+            surface=selected_surface,
+            model=profile["model"],
+            reasoning_effort=profile["reasoning_effort"],
+            launch="attempted",
+        )
         try:
-            self.log_dir.mkdir(parents=True, exist_ok=True)
-            with log_path.open("w", encoding="utf-8") as log:
-                process = subprocess.Popen(
-                    command,
-                    cwd=resolved,
-                    stdin=subprocess.PIPE,
-                    stdout=log,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
-                    start_new_session=True,
-                )
-            assert process.stdin is not None
-            process.stdin.write(prompt)
-            process.stdin.close()
-        except OSError as exc:
-            self.local.update_coding_association(key, {"execution_state": "failed"})
+            if selected_surface == "APP":
+                self._copy_prompt(prompt)
+                self._open_app(resolved)
+                activity = "Workspace opened and exact Jira specification prepared for human submission."
+            else:
+                self._open_terminal(self._terminal_command(resolved, prompt))
+                activity = "Visible Terminal launch requested; Codex session identity is not yet known."
+        except (OSError, subprocess.CalledProcessError) as exc:
+            self.local.update_coding_association(
+                key,
+                {
+                    "execution_surface": selected_surface,
+                    "execution_profile": profile,
+                    "execution_state": "failed",
+                    "execution_last_activity": "Visible launch failed.",
+                    "execution_prepared_at": timestamp,
+                },
+            )
             log_begin(key, launch="failed", error_code="codex_launch_failed")
             raise CodexRuntimeError("codex_launch_failed", "Codex could not be launched.") from exc
-        launch_thread_id = thread_id
-        launch_error: str | None = None
-        confirmed = False
-        deadline = monotonic() + 10
-        while monotonic() < deadline:
-            try:
-                lines = log_path.read_text(encoding="utf-8").splitlines()
-            except OSError:
-                lines = []
-            for line in lines:
-                try:
-                    event = json.loads(line)
-                except ValueError:
-                    continue
-                if event.get("type") == "thread.started":
-                    launch_thread_id = event.get("thread_id") or event.get("threadId") or thread_id
-                    confirmed = True
-                    break
-                if event.get("type") in {"error", "turn.failed"}:
-                    launch_error = "Codex reported a launch failure."
-                    break
-            if confirmed or launch_error:
-                break
-            if process.poll() is not None:
-                launch_error = "Codex exited before confirming the handoff."
-                break
-            sleep(0.1)
-        if launch_error:
-            log_begin(key, launch="failed", error_code="codex_launch_failed")
-            self.local.update_coding_association(key, {"execution_state": "failed"})
-            raise CodexRuntimeError("codex_launch_failed", launch_error)
-        if not confirmed or not launch_thread_id:
-            log_begin(key, launch="failed", error_code="codex_launch_unconfirmed")
-            process.terminate()
-            self.local.update_coding_association(key, {"execution_state": "failed"})
-            raise CodexRuntimeError("codex_launch_unconfirmed", "Codex did not confirm the handoff.")
-        thread_id = launch_thread_id
-        self.local.update_coding_association(
+        association = self.local.update_coding_association(
             key,
             {
-                "codex_thread_id": thread_id,
-                "execution_state": "running",
-                "last_handoff_at": datetime.now(UTC).isoformat(),
+                # Never resume or invent a thread from an earlier model/session.
+                "codex_thread_id": None,
+                "execution_surface": selected_surface,
+                "execution_profile": profile,
+                "execution_state": "prepared",
+                "execution_prepared_at": timestamp,
+                "execution_last_activity": activity,
                 "repository_path": str(resolved),
             },
         )
-        log_begin(key, launch="confirmed", thread_id=thread_id)
+        log_begin(key, surface=selected_surface, state="prepared", launch="prepared")
         return {
             "jira_key": key,
-            "execution_state": "running",
-            "codex_thread_id": thread_id,
-            "resumed": resumed,
+            "execution_surface": selected_surface,
+            "execution_profile": profile,
+            "execution_state": association["execution_state"],
+            "codex_thread_id": None,
+            "prepared_at": timestamp,
+            "last_activity": activity,
         }
 
     @staticmethod
@@ -273,20 +279,77 @@ class CodexHandoffService:
             f'{story["description"]}'
         )
 
-    def _command(self, repository_path: Path, thread_id: str | None) -> list[str]:
-        # Paladin also contains project containers (for example gtkportal2).
-        # begin() authorizes the directory before this narrowly scoped CLI opt-in.
-        git_options = [] if (repository_path / ".git").exists() else ["--skip-git-repo-check"]
-        if thread_id:
-            return [self.executable, "exec", "resume", "--json", *git_options, thread_id, "-"]
+    def _terminal_command(self, repository_path: Path, prompt: str) -> list[str]:
+        """Build an interactive CLI command; its final argument is the full prompt."""
         return [
             self.executable,
-            "exec",
-            "--json",
-            "--sandbox",
-            "workspace-write",
+            "--model",
+            DEFAULT_EXECUTION_PROFILE["model"],
+            "--config",
+            'model_reasoning_effort="high"',
+            "--no-alt-screen",
             "--cd",
             str(repository_path),
-            *git_options,
-            "-",
+            prompt,
         ]
+
+    def _open_app(self, repository_path: Path) -> None:
+        profile = self.execution_profile()
+        subprocess.run(
+            [
+                self.executable,
+                "app",
+                "--config",
+                f'model="{profile["model"]}"',
+                "--config",
+                f'model_reasoning_effort="{profile["reasoning_effort"]}"',
+                str(repository_path),
+            ],
+            check=True,
+        )
+
+    @staticmethod
+    def _copy_prompt(prompt: str) -> None:
+        subprocess.run(["pbcopy"], input=prompt, text=True, check=True)
+
+    @staticmethod
+    def _open_terminal(command: list[str]) -> None:
+        # The shell command is quoted as data and passed as an argument to
+        # osascript, never interpolated into AppleScript or a shell expression.
+        script = shlex.join(command)
+        subprocess.run(
+            [
+                "osascript",
+                "-e", "on run argv",
+                "-e", 'tell application "Terminal" to activate',
+                "-e", 'tell application "Terminal" to do script item 1 of argv',
+                "-e", "end run",
+                script,
+            ],
+            check=True,
+        )
+
+    def record_execution_status(
+        self, jira_key: str, state: str, *, thread_id: str | None = None, activity: str | None = None
+    ) -> dict[str, Any]:
+        """Persist only a known execution state; completion always awaits review."""
+        if state not in EXECUTION_STATES:
+            raise ValueError("Unknown execution state")
+        recorded_state = "awaiting_human_review" if state == "completed" else state
+        values: dict[str, Any] = {
+            "execution_state": recorded_state,
+            "execution_last_activity": activity or (
+                "Agent completion reported; human review is required."
+                if state == "completed" else f"Execution state reported as {recorded_state}."
+            ),
+            "execution_last_activity_at": datetime.now(UTC).isoformat(),
+        }
+        if thread_id:
+            values["codex_thread_id"] = thread_id
+        association = self.local.update_coding_association(jira_key, values)
+        log_begin(jira_key, state=recorded_state, thread_id=thread_id or "unknown")
+        return association
+
+    def record_agent_completed(self, jira_key: str, *, thread_id: str | None = None) -> dict[str, Any]:
+        """Record real completion evidence without bypassing required human review."""
+        return self.record_execution_status(jira_key, "completed", thread_id=thread_id)

@@ -256,16 +256,17 @@ def create_app(
     def begin_coding_jira_issue(key: str):
         payload = request.get_json(silent=True)
         payload = payload if isinstance(payload, dict) else {}
-        log_begin(key, local_project_id=payload.get("local_project_id"))
-        if set(payload) - {"local_project_id"}:
+        log_begin(key, local_project_id=payload.get("local_project_id"), surface=payload.get("surface"))
+        if set(payload) - {"local_project_id", "surface"}:
             log_begin(key, repository_validation="failed", launch="failed", error_code="validation_error")
             return jsonify(
                 {
                     "error": "validation_error",
-                    "message": "Only a known Jaza local_project_id is accepted.",
+                    "message": "Only a known Jaza local_project_id and APP or TERMINAL surface are accepted.",
                 }
             ), 400
         try:
+            surface = codex_handoff.validate_surface(payload.get("surface"))
             if payload.get("local_project_id"):
                 coding.set_repository(key, str(payload["local_project_id"]))
             story = coding.issue(key)
@@ -279,7 +280,7 @@ def create_app(
                     }
                 ), 409
             story = coding.transition_to_in_progress(key)
-            handoff = codex_handoff.begin(story, str(story["local_repository_path"]))
+            handoff = codex_handoff.begin(story, str(story["local_repository_path"]), surface)
             return jsonify({"item": coding.issue(key), "handoff": handoff})
         except JiraIntegrationError as error:
             log_begin(key, launch="failed", error_code=error.code, **(

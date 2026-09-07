@@ -131,6 +131,11 @@ describe('AppComponent', () => {
                     local_repository_path: null,
                     codex_thread_id: null,
                     execution_state: 'not_started',
+                    execution_surface: null,
+                    execution_profile: null,
+                    execution_prepared_at: null,
+                    execution_last_activity: null,
+                    execution_last_activity_at: null,
                   },
                 ],
                 repositories: [],
@@ -186,5 +191,6 @@ describe('AppComponent', () => {
     expect(text).toContain('In Review');
     expect(text).toContain('Done');
     expect(text).toContain('SCRUM-1');
+    expect(text).toContain('Choose APP / TERMINAL');
   });
 });

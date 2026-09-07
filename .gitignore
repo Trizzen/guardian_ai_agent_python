@@ -43,7 +43,8 @@ frontend/coverage/
 # Local launcher logs
 
 .runtime/
-
+#don't need to puths up codecrawlwer, just for local
+_codecrawler/
 # IDE/editor
 
 .idea/

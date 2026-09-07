@@ -375,7 +375,7 @@
                                       <small>{{ story.jira_key }}</small><strong>{{ story.summary }}</strong>
                                       <span>{{ story.assignee || 'Unassigned' }}</span>
                                     </button>
-                                    <button type="button" class="begin-action" [disabled]="story.status === 'in_review' || story.status === 'done' || !!startingStory" (click)="beginStory(story)">{{ startingStory === story.jira_key ? 'Starting…' : 'Begin' }}</button>
+                                    <button type="button" class="begin-action" [disabled]="story.status === 'in_review' || story.status === 'done' || !!startingStory" (click)="selectStory(story)">Choose APP / TERMINAL</button>
                                   </article>
                                 } @empty { <p class="jira-empty">No stories</p> }
                               </section>
@@ -385,7 +385,7 @@
                             <section class="jira-detail">
                               <div class="jira-detail-heading">
                                 <div><small>{{ story.jira_key }} · {{ displayLabel(story.status) }}</small><h4>{{ story.summary }}</h4></div>
-                                <button type="button" class="begin-action" [disabled]="story.status === 'in_review' || story.status === 'done' || !!startingStory" (click)="beginStory(story)">{{ startingStory === story.jira_key ? 'Starting…' : 'Begin' }}</button>
+                                <span class="execution-profile">Codex profile: GPT-5.6 Terra · High</span>
                               </div>
                               <div class="jira-metadata"><span>Assignee: {{ story.assignee || 'Unassigned' }}</span><span>Sprint: {{ story.sprint }}</span>@if (story.priority) { <span>Priority: {{ story.priority }}</span> }</div>
                               @if (!story.local_repository_path && codingBoard.repositories.length) {
@@ -396,6 +396,16 @@
                                   </select>
                                 </label>
                               } @else if (story.local_repository_path) { <small class="repository-path">Repository: {{ story.local_repository_path }}</small> }
+                              <div class="execution-surface" aria-label="Codex execution surface">
+                                <span>Choose visible execution surface</span>
+                                <div>
+                                  <button type="button" class="begin-action" [disabled]="story.status === 'in_review' || story.status === 'done' || !!startingStory" (click)="beginStory(story, 'APP')">{{ startingStory === story.jira_key ? 'Preparing…' : 'APP · Codex Desktop' }}</button>
+                                  <button type="button" class="begin-action" [disabled]="story.status === 'in_review' || story.status === 'done' || !!startingStory" (click)="beginStory(story, 'TERMINAL')">{{ startingStory === story.jira_key ? 'Preparing…' : 'TERMINAL · Visible CLI' }}</button>
+                                </div>
+                                @if (story.execution_surface) {
+                                  <small>Last preparation: {{ story.execution_surface }} · {{ displayLabel(story.execution_state) }}@if (story.execution_profile; as profile) { · {{ profile.model }} · {{ profile.reasoning_effort }} }@if (story.execution_last_activity) { · {{ story.execution_last_activity }} }</small>
+                                }
+                              </div>
                               <div class="jira-description"><span>Full description</span><pre>{{ story.description || 'No description supplied.' }}</pre></div>
                             </section>
                           }

@@ -7,7 +7,12 @@ from typing import Any
 import pytest
 
 from jaza_sentinel import create_app
-from jaza_sentinel.codex_runtime import CodexHandoffService, CodexRuntimeError, CodexUsageService
+from jaza_sentinel.codex_runtime import (
+    EXECUTION_STATES,
+    CodexHandoffService,
+    CodexRuntimeError,
+    CodexUsageService,
+)
 from jaza_sentinel.integrations.jira import JiraCodingService, JiraIntegrationError
 from jaza_sentinel.integrations.jira.service import adf_to_text, text_to_adf
 from jaza_sentinel.storage import JsonStateRepository
@@ -200,25 +205,6 @@ def test_codex_prompt_contains_key_summary_and_unmodified_full_description():
     assert prompt.endswith(description)
 
 
-def test_existing_codex_thread_uses_supported_resume_command(repository, tmp_path):
-    (tmp_path / ".git").mkdir()
-    service = CodexHandoffService(repository, executable="/known/codex")
-    assert service._command(tmp_path, "thread-123") == [
-        "/known/codex", "exec", "resume", "--json", "thread-123", "-"
-    ]
-
-
-def test_codex_invocation_failure_is_explicit(repository):
-    service = CodexHandoffService(repository, executable="/definitely/missing/codex")
-    project = next(item for item in repository.projects() if item["id"] == "jaza-sentinel")
-    with pytest.raises(CodexRuntimeError) as error:
-        service.begin(
-            {"jira_key": "SCRUM-7", "summary": "Test", "description": "Full"},
-            project["repository_path"],
-        )
-    assert error.value.code == "codex_launch_failed"
-
-
 def test_five_hour_usage_parses_real_app_server_shape_and_missing_is_unavailable(monkeypatch):
     parsed = CodexUsageService.parse_rate_limits({
         "result": {"rateLimitsByLimitId": {"codex": {"primary": {
@@ -254,6 +240,20 @@ class FakeUsage:
         return {"available": False}
 
 
+class FakeVisibleHandoff:
+    """Route fake: prove Begin validation without opening an app or CLI."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[dict[str, Any], str, str]] = []
+
+    def validate_surface(self, surface: object) -> str:
+        return CodexHandoffService.validate_surface(surface)
+
+    def begin(self, story: dict[str, Any], repository_path: str, surface: str) -> dict[str, Any]:
+        self.calls.append((story, repository_path, surface))
+        return {"execution_state": "prepared", "execution_surface": surface, "codex_thread_id": None}
+
+
 def test_routes_reject_arbitrary_commands_and_preserve_full_description(tmp_path: Path):
     app = create_app(
         data_dir=tmp_path / "runtime",
@@ -263,12 +263,41 @@ def test_routes_reject_arbitrary_commands_and_preserve_full_description(tmp_path
     )
     app.config["TESTING"] = True
     client = app.test_client()
-    rejected = client.post("/api/coding/jira/issues/SCRUM-1/begin", json={"command": "rm -rf /"})
-    assert rejected.status_code == 400
+    for unsafe in ({"command": "rm -rf /"}, {"repository_path": "/tmp"}, {"pid": 42}):
+        rejected = client.post("/api/coding/jira/issues/SCRUM-1/begin", json=unsafe)
+        assert rejected.status_code == 400
+    invalid_surface = client.post("/api/coding/jira/issues/SCRUM-1/begin", json={"surface": "BACKGROUND"})
+    assert invalid_surface.status_code == 400
     full = "Alpha\n\nBeta"
     created = client.post("/api/coding/jira/issues", json={"title": "T", "description": full})
     assert created.status_code == 201
     assert created.get_json()["item"]["description"] == full
+
+
+def test_begin_route_accepts_discovered_gtkportal2_for_app(repository, jira, paladin, tmp_path):
+    """SCRUM-16 must validate the browser ID through SCRUM-14 shared authority."""
+    service, jira_client = jira
+    jira_client.issues["SCRUM-2"] = jira_client._issue(
+        "SCRUM-2", "GTK Garden Pro Analysis", "To Do", "Exact full specification", True
+    )
+    handoff = FakeVisibleHandoff()
+    app = create_app(
+        data_dir=tmp_path / "app-state",
+        jira_service=service,
+        codex_handoff_service=handoff,  # type: ignore[arg-type]
+        codex_usage_service=FakeUsage(),
+    )
+    app.config["TESTING"] = True
+
+    response = app.test_client().post(
+        "/api/coding/jira/issues/SCRUM-2/begin",
+        json={"local_project_id": "gtkportal2", "surface": "APP"},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["item"]["local_project_id"] == "gtkportal2"
+    assert handoff.calls[0][1] == str(paladin / "gtkportal2")
+    assert handoff.calls[0][2] == "APP"
 
 
 @pytest.fixture
@@ -290,58 +319,75 @@ def paladin(tmp_path, monkeypatch):
     return root
 
 
-def fake_launch(monkeypatch, events, exit_code=None):
-    import io
-    import json
+def fake_visible_launch(monkeypatch):
     calls = []
 
-    class Prompt(io.StringIO):
-        def close(self):
-            self.sent = self.getvalue()
-            super().close()
-
-    class Process:
-        stdin = Prompt()
-        terminated = False
-
-        def poll(self):
-            return exit_code
-
-        def terminate(self):
-            self.terminated = True
-
-    process = Process()
-
-    def popen(command, **kwargs):
+    def run(command, **kwargs):
         calls.append((command, kwargs))
-        for event in events:
-            kwargs["stdout"].write(json.dumps(event) + "\n")
-        kwargs["stdout"].flush()
-        return process
+        return None
 
-    monkeypatch.setattr("jaza_sentinel.codex_runtime.subprocess.Popen", popen)
-    return calls, process
+    monkeypatch.setattr("jaza_sentinel.codex_runtime.subprocess.run", run)
+    return calls
 
 
-def test_discovered_repository_shared_by_jira_and_codex(repository, jira, paladin, monkeypatch, tmp_path, caplog):
+def test_terminal_is_visible_interactive_and_preserves_full_spec(repository, jira, paladin, monkeypatch, caplog):
     service, _ = jira
     assert service.set_repository("SCRUM-1", "gtkportal2")["repository_path"] == str(paladin / "gtkportal2")
     story = service.issue("SCRUM-1")
-    calls, process = fake_launch(monkeypatch, [{"type": "thread.started", "thread_id": "real-event-id"}])
-    handoff = CodexHandoffService(repository, executable="/known/codex", log_dir=tmp_path / "logs")
-    result = handoff.begin(story, story["local_repository_path"])
-    assert result["codex_thread_id"] == "real-event-id"
-    assert repository.coding_association("SCRUM-1")["execution_state"] == "running"
-    assert repository.coding_association("SCRUM-1")["codex_thread_id"] == "real-event-id"
-    assert calls[0][0] == ["/known/codex", "exec", "--json", "--sandbox", "workspace-write", "--cd", str(paladin / "gtkportal2"), "--skip-git-repo-check", "-"]
-    assert calls[0][1]["cwd"] == paladin / "gtkportal2"
-    assert process.stdin.sent == handoff._prompt(story)
+    calls = fake_visible_launch(monkeypatch)
+    handoff = CodexHandoffService(repository, executable="/known/codex")
+    result = handoff.begin(story, story["local_repository_path"], "TERMINAL")
+    terminal_command = calls[0][0]
+    assert terminal_command[:2] == ["osascript", "-e"]
+    shell_command = terminal_command[-1]
+    assert " exec" not in shell_command
+    assert "--no-alt-screen" in shell_command
+    assert "--model gpt-5.6-terra" in shell_command
+    assert 'model_reasoning_effort="high"' in shell_command
+    assert handoff._prompt(story) in shell_command
+    assert result["execution_state"] == "prepared"
+    assert result["codex_thread_id"] is None
+    association = repository.coding_association("SCRUM-1")
+    assert association["execution_surface"] == "TERMINAL"
+    assert association["execution_profile"] == {"model": "gpt-5.6-terra", "reasoning_effort": "high"}
+    assert association["execution_state"] == "prepared"
     assert 'repository_validation="passed"' in caplog.text
-    assert 'launch="confirmed" thread_id="real-event-id"' in caplog.text
+    assert 'surface="TERMINAL" state="prepared"' in caplog.text
     assert story["description"] not in caplog.text
-    calls, _ = fake_launch(monkeypatch, [{"type": "thread.started", "thread_id": "real-event-id"}])
-    assert handoff.begin(story, story["local_repository_path"])["resumed"] is True
-    assert calls[0][0] == ["/known/codex", "exec", "resume", "--json", "--skip-git-repo-check", "real-event-id", "-"]
+
+
+def test_app_opens_workspace_prepares_clipboard_and_never_executes(repository, jira, paladin, monkeypatch):
+    service, _ = jira
+    service.set_repository("SCRUM-1", "gtkportal2")
+    story = service.issue("SCRUM-1")
+    calls = fake_visible_launch(monkeypatch)
+    handoff = CodexHandoffService(repository, executable="/known/codex")
+    result = handoff.begin(story, story["local_repository_path"], "APP")
+    assert calls[0][0] == ["pbcopy"]
+    assert calls[0][1]["input"] == handoff._prompt(story)
+    assert calls[1][0] == [
+        "/known/codex", "app", "--config", 'model="gpt-5.6-terra"', "--config",
+        'model_reasoning_effort="high"', str(paladin / "gtkportal2"),
+    ]
+    assert all("exec" not in command for command, _ in calls)
+    assert result["execution_state"] == "prepared"
+    assert result["codex_thread_id"] is None
+
+
+def test_previous_astra_association_cannot_change_new_terra_launch(repository, jira, paladin, monkeypatch):
+    service, _ = jira
+    service.set_repository("SCRUM-1", "gtkportal2")
+    repository.update_coding_association("SCRUM-1", {
+        "codex_thread_id": "astra-thread", "execution_profile": {"model": "gpt-6-astra", "reasoning_effort": "max"},
+    })
+    story = service.issue("SCRUM-1")
+    calls = fake_visible_launch(monkeypatch)
+    CodexHandoffService(repository, executable="/known/codex").begin(story, story["local_repository_path"], "TERMINAL")
+    assert "astra-thread" not in calls[0][0][-1]
+    assert "gpt-6-astra" not in calls[0][0][-1]
+    association = repository.coding_association("SCRUM-1")
+    assert association["codex_thread_id"] is None
+    assert association["execution_profile"]["model"] == "gpt-5.6-terra"
 
 
 @pytest.mark.parametrize("folder", ["../outside", "ignored", "escape", "ignored-alias", "plain-file", "gtkportal2/nested", "missing"])
@@ -354,54 +400,24 @@ def test_shared_repository_boundary(repository, jira, paladin, monkeypatch, fold
     assert error.value.code == "repository_not_allowlisted"
     runtime = CodexHandoffService(repository, executable="/known/codex")
     with pytest.raises(CodexRuntimeError) as error:
-        runtime.begin({"jira_key": "SCRUM-1"}, str(paladin / folder))
+        runtime.begin({"jira_key": "SCRUM-1"}, str(paladin / folder), "APP")
     assert error.value.code == "repository_not_allowlisted"
     assert 'repository_validation="failed"' in caplog.text
     assert 'launch="attempted"' not in caplog.text
 
 
-@pytest.mark.parametrize("events,exit_code,error_code", [
-    ([{"type": "error", "message": "secret must not be logged"}], 1, "codex_launch_failed"),
-    ([], 1, "codex_launch_failed"),
-    ([], None, "codex_launch_unconfirmed"),
-    ([{"type": "thread.started"}], None, "codex_launch_unconfirmed"),
-])
-def test_no_fake_running_state(repository, paladin, monkeypatch, tmp_path, events, exit_code, error_code, caplog):
-    calls, process = fake_launch(monkeypatch, events, exit_code)
-    ticks = iter([0, 1, 11])
-    monkeypatch.setattr("jaza_sentinel.codex_runtime.monotonic", lambda: next(ticks))
-    monkeypatch.setattr("jaza_sentinel.codex_runtime.sleep", lambda _: None)
-    runtime = CodexHandoffService(repository, executable="/known/codex", log_dir=tmp_path / "logs")
-    with pytest.raises(CodexRuntimeError) as error:
-        runtime.begin({"jira_key": "SCRUM-1", "summary": "Test", "description": "Private spec"}, str(paladin / "gtkportal2"))
-    assert error.value.code == error_code
-    association = repository.coding_association("SCRUM-1")
-    assert association["execution_state"] == "failed"
-    assert not association.get("codex_thread_id")
-    assert 'launch="confirmed"' not in caplog.text
-    assert 'launch="failed"' in caplog.text
-    assert "secret must not be logged" not in caplog.text
-    if error_code == "codex_launch_unconfirmed":
-        assert process.terminated
-
-
-def test_begin_route_keeps_safe_json_error(repository, jira, paladin, tmp_path, caplog):
+def test_no_fake_running_or_completed_state_and_completion_requires_human_review(repository, jira, paladin, monkeypatch):
+    assert {"prepared", "running", "completed", "failed", "stopped", "awaiting_human_review"} <= set(EXECUTION_STATES)
     service, _ = jira
-    app = create_app(data_dir=tmp_path / "app-state", jira_service=service,
-                     codex_handoff_service=CodexHandoffService(repository, executable="/missing/codex", log_dir=tmp_path / "logs"))
-    response = app.test_client().post("/api/coding/jira/issues/SCRUM-1/begin", json={"local_project_id": "gtkportal2"})
-    assert response.status_code == 503
-    assert response.get_json() == {"error": "codex_launch_failed", "message": "Codex could not be launched."}
-    assert repository.coding_association("SCRUM-1")["execution_state"] == "failed"
-    assert 'error_code="codex_launch_failed"' in caplog.text
-
-
-def test_fresh_git_repository_keeps_original_command(repository, tmp_path):
-    (tmp_path / ".git").mkdir()
+    service.set_repository("SCRUM-1", "gtkportal2")
+    story = service.issue("SCRUM-1")
+    fake_visible_launch(monkeypatch)
     runtime = CodexHandoffService(repository, executable="/known/codex")
-    assert runtime._command(tmp_path, None) == [
-        "/known/codex", "exec", "--json", "--sandbox", "workspace-write", "--cd", str(tmp_path), "-"
-    ]
+    result = runtime.begin(story, story["local_repository_path"], "TERMINAL")
+    assert result["execution_state"] == "prepared"
+    association = runtime.record_agent_completed("SCRUM-1", thread_id="real-observed-id")
+    assert association["execution_state"] == "awaiting_human_review"
+    assert association["codex_thread_id"] == "real-observed-id"
 
 
 def test_codex_resolution_prefers_current_app_and_falls_back_to_path(monkeypatch, tmp_path):

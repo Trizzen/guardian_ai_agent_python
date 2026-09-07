@@ -134,11 +134,12 @@ export class SentinelApiService {
 
   beginCodingStory(
     key: string,
+    surface: 'APP' | 'TERMINAL',
     localProjectId?: string,
   ): Observable<{ item: CodingStory; handoff: Record<string, unknown> }> {
     return this.http.post<{ item: CodingStory; handoff: Record<string, unknown> }>(
       `/api/coding/jira/issues/${key}/begin`,
-      localProjectId ? { local_project_id: localProjectId } : {},
+      localProjectId ? { local_project_id: localProjectId, surface } : { surface },
     );
   }
 }

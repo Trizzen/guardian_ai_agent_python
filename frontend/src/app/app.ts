@@ -310,7 +310,7 @@ export class AppComponent implements OnInit {
       });
   }
 
-  beginStory(story: CodingStory): void {
+  beginStory(story: CodingStory, surface: 'APP' | 'TERMINAL'): void {
     if (story.status === 'in_review' || story.status === 'done' || this.startingStory) {
       return;
     }
@@ -323,7 +323,7 @@ export class AppComponent implements OnInit {
     this.startingStory = story.jira_key;
     this.codingError = '';
     this.api
-      .beginCodingStory(story.jira_key, localProjectId || undefined)
+      .beginCodingStory(story.jira_key, surface, localProjectId || undefined)
       .pipe(
         finalize(() => {
           this.startingStory = '';
@@ -342,7 +342,7 @@ export class AppComponent implements OnInit {
               ),
             };
           }
-          this.flash(`${item.jira_key} handed to Codex.`);
+          this.flash(`${item.jira_key} prepared in ${surface}; human-controlled Codex execution has not been inferred.`);
           this.changeDetector.markForCheck();
         },
         error: (error: HttpErrorResponse) => {

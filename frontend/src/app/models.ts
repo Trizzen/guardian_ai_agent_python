@@ -83,6 +83,11 @@ export interface CodingStory {
   local_repository_path: string | null;
   codex_thread_id: string | null;
   execution_state: string;
+  execution_surface: 'APP' | 'TERMINAL' | null;
+  execution_profile: { model: string; reasoning_effort: string } | null;
+  execution_prepared_at: string | null;
+  execution_last_activity: string | null;
+  execution_last_activity_at: string | null;
 }
 
 export interface CodingBoard {
