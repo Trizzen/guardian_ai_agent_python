@@ -396,6 +396,26 @@
                                   </select>
                                 </label>
                               } @else if (story.local_repository_path) { <small class="repository-path">Repository: {{ story.local_repository_path }}</small> }
+                              <div class="codecrawler-surface" aria-label="CodeCrawler reconnaissance">
+                                <div>
+                                  <span>Reconnaissance snapshot</span>
+                                  @if (story.codecrawler; as crawl) {
+                                    <small [class.crawl-failed]="crawl.state === 'failed'" [class.crawl-completed]="crawl.state === 'completed'">
+                                      {{ crawl.state === 'completed' ? 'Fresh snapshot completed' : (crawl.state === 'running' ? 'CodeCrawler running' : (crawl.state === 'not_run' ? 'Not run — review before APP / TERMINAL' : 'Last crawl failed')) }}
+                                      @if (crawl.completed_at) { · {{ crawl.completed_at | date:'short' }} }
+                                      @if (crawl.file_count !== null) { · {{ crawl.file_count }} files }
+                                    </small>
+                                  } @else {
+                                    <small>Not run — review the repository before choosing APP / TERMINAL.</small>
+                                  }
+                                </div>
+                                <button type="button" class="begin-action" [disabled]="!!crawlingStory || (!story.local_project_id && !repositorySelections[story.jira_key])" (click)="runCodeCrawler(story)">{{ crawlingStory === story.jira_key ? 'Crawling…' : 'Run CodeCrawler' }}</button>
+                              </div>
+                              @if (story.codecrawler?.state === 'completed') {
+                                <div class="codecrawler-output">
+                                  @for (outputPath of story.codecrawler?.output_paths || []; track outputPath) { <small>{{ outputPath }}</small> }
+                                </div>
+                              }
                               <div class="execution-surface" aria-label="Codex execution surface">
                                 <span>Choose visible execution surface</span>
                                 <div>
@@ -406,7 +426,7 @@
                                   <small>Last preparation: {{ story.execution_surface }} · {{ displayLabel(story.execution_state) }}@if (story.execution_profile; as profile) { · {{ profile.model }} · {{ profile.reasoning_effort }} }@if (story.execution_last_activity) { · {{ story.execution_last_activity }} }</small>
                                 }
                               </div>
-                              <div class="jira-description"><span>Full description</span><pre>{{ story.description || 'No description supplied.' }}</pre></div>
+                              <div class="jira-description"><div class="jira-description-heading"><span>Full description</span><button type="button" class="begin-action" (click)="copyStoryMarkdown(story)">Copy Markdown</button></div><pre>{{ story.markdown_description || story.description || 'No description supplied.' }}</pre></div>
                             </section>
                           }
                         } @else {

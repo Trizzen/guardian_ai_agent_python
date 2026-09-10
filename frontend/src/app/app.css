@@ -1587,8 +1587,18 @@ footer {
 .jira-metadata { justify-content: flex-start; flex-wrap: wrap; gap: 11px; margin-top: 10px; color: var(--muted); font-size: 0.54rem; }
 .repository-choice { display: block; max-width: 360px; margin-top: 12px; }
 .repository-path { display: block; margin-top: 10px; color: var(--dim); font-size: 0.51rem; }
+.codecrawler-surface { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; padding: 10px; border: 1px solid rgba(150, 125, 255, 0.2); border-radius: 7px; background: rgba(150, 125, 255, 0.035); }
+.codecrawler-surface span, .codecrawler-surface small { display: block; }
+.codecrawler-surface span { color: #d6c8ff; font-size: 0.55rem; font-weight: 780; letter-spacing: 0.06em; text-transform: uppercase; }
+.codecrawler-surface small, .codecrawler-output small { margin-top: 4px; color: var(--dim); font-size: 0.51rem; }
+.codecrawler-surface .crawl-completed { color: #98ead1; }
+.codecrawler-surface .crawl-failed { color: #ff9eb3; }
+.codecrawler-surface .begin-action { margin-top: 0; white-space: nowrap; }
+.codecrawler-output { display: grid; gap: 2px; margin-top: 7px; padding-left: 10px; }
 .jira-description { margin-top: 13px; }
-.jira-description > span { display: block; margin-bottom: 7px; color: var(--dim); font-size: 0.52rem; font-weight: 780; letter-spacing: 0.08em; text-transform: uppercase; }
+.jira-description-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 7px; }
+.jira-description-heading > span { color: var(--dim); font-size: 0.52rem; font-weight: 780; letter-spacing: 0.08em; text-transform: uppercase; }
+.jira-description-heading .begin-action { margin-top: 0; }
 .jira-description pre { max-height: 360px; margin: 0; padding: 12px; overflow: auto; white-space: pre-wrap; word-break: break-word; color: #c9c5d1; border: 1px solid var(--line); border-radius: 7px; background: #0c0d14; font-family: inherit; font-size: 0.6rem; line-height: 1.55; }
 
 .insight-summary { margin: 15px 0; color: #d3cedd; font-size: 0.7rem; line-height: 1.65; }

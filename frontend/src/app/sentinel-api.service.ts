@@ -142,4 +142,14 @@ export class SentinelApiService {
       localProjectId ? { local_project_id: localProjectId, surface } : { surface },
     );
   }
+
+  runCodeCrawler(
+    key: string,
+    localProjectId: string,
+  ): Observable<{ item: CodingStory; crawl: Record<string, unknown> }> {
+    return this.http.post<{ item: CodingStory; crawl: Record<string, unknown> }>(
+      `/api/coding/jira/issues/${key}/codecrawler`,
+      { local_project_id: localProjectId },
+    );
+  }
 }

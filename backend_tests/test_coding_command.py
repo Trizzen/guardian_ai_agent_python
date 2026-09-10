@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 from pathlib import Path
+import subprocess
+import sys
 from typing import Any
 
 import pytest
@@ -13,8 +16,9 @@ from jaza_sentinel.codex_runtime import (
     CodexRuntimeError,
     CodexUsageService,
 )
+from jaza_sentinel.codecrawler import CodeCrawlerError, CodeCrawlerService
 from jaza_sentinel.integrations.jira import JiraCodingService, JiraIntegrationError
-from jaza_sentinel.integrations.jira.service import adf_to_text, text_to_adf
+from jaza_sentinel.integrations.jira.service import adf_to_markdown, adf_to_text, text_to_adf
 from jaza_sentinel.storage import JsonStateRepository
 
 
@@ -190,6 +194,7 @@ def test_begin_transition_only_allows_todo_or_in_progress(jira):
 def test_repository_mapping_is_allowlisted(jira):
     service, _ = jira
     assert service.set_repository("SCRUM-1", "jaza-sentinel")["repository_path"].endswith("agentic-ai-agent")
+    assert service.issue("SCRUM-1")["codecrawler"]["state"] == "not_run"
     with pytest.raises(JiraIntegrationError) as error:
         service.set_repository("SCRUM-1", "made-up-project")
     assert error.value.code == "repository_not_allowlisted"
@@ -240,6 +245,27 @@ class FakeUsage:
         return {"available": False}
 
 
+def fake_codecrawler_run(monkeypatch, expected_command: list[str], repository_path: Path, *, exit_code: int = 0):
+    """Fake only the approved crawler process; no tool, shell, or model runs."""
+    calls: list[tuple[list[str], dict[str, Any]]] = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        assert command == expected_command
+        assert kwargs["shell"] is False
+        output = repository_path / "_codecrawler"
+        output.mkdir(exist_ok=True)
+        for name in ("CODECRAWLER_TREE.md", "CODECRAWLER_SOURCE.md"):
+            (output / name).write_text(name, encoding="utf-8")
+        (output / "CODECRAWLER_MANIFEST.json").write_text(
+            json.dumps({"file_count": 7}), encoding="utf-8"
+        )
+        return subprocess.CompletedProcess(command, exit_code)
+
+    monkeypatch.setattr("jaza_sentinel.codecrawler.subprocess.run", run)
+    return calls
+
+
 class FakeVisibleHandoff:
     """Route fake: prove Begin validation without opening an app or CLI."""
 
@@ -272,6 +298,118 @@ def test_routes_reject_arbitrary_commands_and_preserve_full_description(tmp_path
     created = client.post("/api/coding/jira/issues", json={"title": "T", "description": full})
     assert created.status_code == 201
     assert created.get_json()["item"]["description"] == full
+
+
+def test_codecrawler_route_runs_only_the_approved_tool_for_the_allowlisted_repository(
+    repository, jira, paladin, tmp_path, monkeypatch
+):
+    service, client = jira
+    client.issues["SCRUM-2"] = client._issue(
+        "SCRUM-2", "Reconnaissance", "To Do", "Full Jira specification", True
+    )
+    executable = tmp_path / "codecrawler.py"
+    executable.write_text("# fixed test executable\n", encoding="utf-8")
+    target = paladin / "gtkportal2"
+    crawler = CodeCrawlerService(repository, executable=executable)
+    calls = fake_codecrawler_run(
+        monkeypatch, [sys.executable, str(executable), str(target)], target
+    )
+    app = create_app(
+        data_dir=tmp_path / "app-state",
+        jira_service=service,
+        codex_usage_service=FakeUsage(),
+        codecrawler_service=crawler,
+    )
+    app.config["TESTING"] = True
+
+    response = app.test_client().post(
+        "/api/coding/jira/issues/SCRUM-2/codecrawler", json={"local_project_id": "gtkportal2"}
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert calls and payload["crawl"]["state"] == "completed"
+    assert payload["crawl"]["file_count"] == 7
+    assert payload["item"]["codecrawler"]["state"] == "completed"
+    assert payload["item"]["codecrawler"]["output_paths"] == [
+        str(target / "_codecrawler" / name)
+        for name in ("CODECRAWLER_TREE.md", "CODECRAWLER_SOURCE.md", "CODECRAWLER_MANIFEST.json")
+    ]
+
+
+def test_codecrawler_rejects_unknown_payloads_and_shared_authority_escapes(repository, jira, paladin, tmp_path):
+    service, _ = jira
+    executable = tmp_path / "codecrawler.py"
+    executable.write_text("# fixed test executable\n", encoding="utf-8")
+    crawler = CodeCrawlerService(repository, executable=executable)
+    app = create_app(
+        data_dir=tmp_path / "app-state",
+        jira_service=service,
+        codex_usage_service=FakeUsage(),
+        codecrawler_service=crawler,
+    )
+    app.config["TESTING"] = True
+    client = app.test_client()
+    for unsafe in (
+        {"command": "rm -rf /"},
+        {"local_project_id": "gtkportal2", "repository_path": "/tmp"},
+        {"local_project_id": "gtkportal2", "tool": "other"},
+    ):
+        assert client.post("/api/coding/jira/issues/SCRUM-1/codecrawler", json=unsafe).status_code == 400
+    rejected = client.post(
+        "/api/coding/jira/issues/SCRUM-1/codecrawler", json={"local_project_id": "escape"}
+    )
+    assert rejected.status_code == 400
+    with pytest.raises(CodeCrawlerError) as error:
+        crawler.run("ignored")
+    assert error.value.code == "repository_not_allowlisted"
+
+
+def test_codecrawler_serializes_duplicate_runs_and_records_bounded_failure(repository, paladin, tmp_path, monkeypatch):
+    executable = tmp_path / "codecrawler.py"
+    executable.write_text("# fixed test executable\n", encoding="utf-8")
+    target = paladin / "gtkportal2"
+    crawler = CodeCrawlerService(repository, executable=executable)
+    lock = crawler._lock_for("gtkportal2")
+    assert lock.acquire(blocking=False)
+    try:
+        with pytest.raises(CodeCrawlerError) as duplicate:
+            crawler.run("gtkportal2")
+        assert duplicate.value.code == "codecrawler_already_running"
+    finally:
+        lock.release()
+
+    fake_codecrawler_run(monkeypatch, [sys.executable, str(executable), str(target)], target, exit_code=9)
+    with pytest.raises(CodeCrawlerError) as failure:
+        crawler.run("gtkportal2", jira_key="SCRUM-1")
+    assert failure.value.code == "codecrawler_exit_nonzero"
+    persisted = repository.codecrawler_run("gtkportal2")
+    assert persisted["state"] == "failed"
+    assert persisted["exit_code"] == 9
+    assert persisted["error_category"] == "codecrawler_exit_nonzero"
+
+
+def test_jira_adf_markdown_preserves_structure_without_summarizing_or_truncating():
+    adf = {
+        "type": "doc",
+        "version": 1,
+        "content": [
+            {"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": "Constraints"}]},
+            {"type": "bulletList", "content": [
+                {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Keep every detail"}]}]},
+            ]},
+            {"type": "taskList", "content": [
+                {"type": "taskItem", "attrs": {"state": "DONE"}, "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Verify output"}]}]},
+            ]},
+            {"type": "codeBlock", "attrs": {"language": "python"}, "content": [{"type": "text", "text": "print('exact')"}]},
+            {"type": "paragraph", "content": [{"type": "text", "text": "Final unabridged sentence."}]},
+        ],
+    }
+    markdown = adf_to_markdown(adf)
+    assert markdown == (
+        "## Constraints\n\n- Keep every detail\n\n- [x] Verify output\n\n"
+        "```python\nprint('exact')\n```\n\nFinal unabridged sentence."
+    )
 
 
 def test_begin_route_accepts_discovered_gtkportal2_for_app(repository, jira, paladin, tmp_path):

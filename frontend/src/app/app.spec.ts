@@ -3,7 +3,7 @@ import { of } from 'rxjs';
 
 import { AppComponent } from './app';
 import { SentinelApiService } from './sentinel-api.service';
-import { SentinelSnapshot } from './models';
+import { CodingStory, SentinelSnapshot } from './models';
 
 const snapshot: SentinelSnapshot = {
   dashboard: {
@@ -192,5 +192,46 @@ describe('AppComponent', () => {
     expect(text).toContain('Done');
     expect(text).toContain('SCRUM-1');
     expect(text).toContain('Choose APP / TERMINAL');
+  });
+
+  it('copies the full deterministic Markdown Jira payload without calling a model API', async () => {
+    const fixture = TestBed.createComponent(AppComponent);
+    const story: CodingStory = {
+      jira_key: 'SCRUM-25',
+      summary: 'CodeCrawler workflow',
+      description: 'Flattened view',
+      markdown_description: '## Constraints\n\n- Keep every detail\n\n```python\nprint(1)\n```',
+      status: 'to_do',
+      assignee: null,
+      priority: null,
+      sprint: 'SCRUM Sprint 0',
+      issue_type: 'Story',
+      local_project_id: 'jaza-sentinel',
+      local_repository_path: '/Users/triz/paladin/agentic-ai-agent',
+      codex_thread_id: null,
+      execution_state: 'not_started',
+      execution_surface: null,
+      execution_profile: null,
+      execution_prepared_at: null,
+      execution_last_activity: null,
+      execution_last_activity_at: null,
+      codecrawler: null,
+    };
+    const descriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    let copied = '';
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: async (value: string) => { copied = value; } },
+    });
+    try {
+      await fixture.componentInstance.copyStoryMarkdown(story);
+    } finally {
+      if (descriptor) {
+        Object.defineProperty(navigator, 'clipboard', descriptor);
+      } else {
+        Reflect.deleteProperty(navigator, 'clipboard');
+      }
+    }
+    expect(copied).toBe('# SCRUM-25 — CodeCrawler workflow\n\n## Constraints\n\n- Keep every detail\n\n```python\nprint(1)\n```');
   });
 });

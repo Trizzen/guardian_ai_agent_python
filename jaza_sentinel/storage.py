@@ -70,6 +70,28 @@ class JsonStateRepository:
             self._write_document("sentinel.json", document)
             return deepcopy(current)
 
+    def codecrawler_runs(self) -> dict[str, dict[str, Any]]:
+        with self._lock:
+            document = self._load_document("sentinel.json")
+            value = document.get("codecrawler_runs", {})
+            return deepcopy(value) if isinstance(value, dict) else {}
+
+    def codecrawler_run(self, local_project_id: str) -> dict[str, Any]:
+        return self.codecrawler_runs().get(local_project_id, {})
+
+    def update_codecrawler_run(
+        self, local_project_id: str, values: dict[str, Any]
+    ) -> dict[str, Any]:
+        with self._lock:
+            document = self._load_document("sentinel.json")
+            runs = document.setdefault("codecrawler_runs", {})
+            current = runs.get(local_project_id, {})
+            current.update(deepcopy(values))
+            current["local_project_id"] = local_project_id
+            runs[local_project_id] = current
+            self._write_document("sentinel.json", document)
+            return deepcopy(current)
+
     def link_work_item_to_jira(self, item_id: str, jira_key: str) -> dict[str, Any] | None:
         with self._lock:
             document = self._load_document("sentinel.json")

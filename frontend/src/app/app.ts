@@ -103,6 +103,7 @@ export class AppComponent implements OnInit {
   selectedStory: CodingStory | null = null;
   storyLoading = false;
   startingStory = '';
+  crawlingStory = '';
   repositorySelections: Record<string, string> = {};
   showJiraEditor = false;
   jiraForm = { title: '', description: '' };
@@ -350,6 +351,71 @@ export class AppComponent implements OnInit {
           this.changeDetector.markForCheck();
         },
       });
+  }
+
+  runCodeCrawler(story: CodingStory): void {
+    if (this.crawlingStory) {
+      return;
+    }
+    const localProjectId = story.local_project_id || this.repositorySelections[story.jira_key];
+    if (!localProjectId) {
+      this.codingError = 'Choose a known Jaza repository before running CodeCrawler.';
+      return;
+    }
+    this.crawlingStory = story.jira_key;
+    this.codingError = '';
+    this.api
+      .runCodeCrawler(story.jira_key, localProjectId)
+      .pipe(
+        finalize(() => {
+          this.crawlingStory = '';
+          this.changeDetector.markForCheck();
+        }),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe({
+        next: ({ item }) => {
+          this.selectedStory = item;
+          if (this.codingBoard) {
+            this.codingBoard = {
+              ...this.codingBoard,
+              stories: this.codingBoard.stories.map((current) =>
+                current.jira_key === item.jira_key ? item : current,
+              ),
+            };
+          }
+          this.flash(`${item.jira_key} CodeCrawler snapshot completed; no model was invoked.`);
+          this.changeDetector.markForCheck();
+        },
+        error: (error: HttpErrorResponse) => {
+          this.codingError = this.describeError(error);
+          this.changeDetector.markForCheck();
+        },
+      });
+  }
+
+  async copyStoryMarkdown(story: CodingStory): Promise<void> {
+    const markdown = `# ${story.jira_key} — ${story.summary}\n\n${story.markdown_description || story.description}`;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(markdown);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = markdown;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        const copied = document.execCommand('copy');
+        textarea.remove();
+        if (!copied) {
+          throw new Error('Clipboard access was denied.');
+        }
+      }
+      this.flash(`${story.jira_key} Markdown copied; no model was invoked.`);
+    } catch (error) {
+      this.codingError = error instanceof Error ? error.message : 'Markdown could not be copied.';
+    }
   }
 
   openEdit(item: WorkItem): void {

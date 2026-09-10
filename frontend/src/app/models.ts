@@ -70,10 +70,28 @@ export interface CodexUsage {
   source: string;
 }
 
+export type CodeCrawlerState = 'not_run' | 'running' | 'completed' | 'failed';
+
+export interface CodeCrawlerRun {
+  local_project_id: string;
+  repository_name: string;
+  repository_path: string;
+  tool_name: 'CodeCrawler';
+  jira_key: string | null;
+  state: CodeCrawlerState;
+  started_at: string | null;
+  completed_at: string | null;
+  exit_code: number | null;
+  error_category: string | null;
+  file_count: number | null;
+  output_paths: string[];
+}
+
 export interface CodingStory {
   jira_key: string;
   summary: string;
   description: string;
+  markdown_description: string;
   status: CodingStoryStatus;
   assignee: string | null;
   priority: string | null;
@@ -88,6 +106,7 @@ export interface CodingStory {
   execution_prepared_at: string | null;
   execution_last_activity: string | null;
   execution_last_activity_at: string | null;
+  codecrawler: CodeCrawlerRun | null;
 }
 
 export interface CodingBoard {

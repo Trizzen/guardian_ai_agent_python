@@ -10,6 +10,7 @@ from typing import Any
 from flask import Flask, jsonify, request
 
 from .begin_diagnostics import log_begin
+from .codecrawler import CodeCrawlerError, CodeCrawlerService
 from .codex_pet import CodexPetConfigError, CodexPetController
 from .codex_runtime import CodexHandoffService, CodexRuntimeError, CodexUsageService
 from .integrations.jira import JiraClient, JiraCodingService, JiraIntegrationError
@@ -36,6 +37,7 @@ def create_app(
     jira_service: JiraCodingService | None = None,
     codex_usage_service: CodexUsageService | None = None,
     codex_handoff_service: CodexHandoffService | None = None,
+    codecrawler_service: CodeCrawlerService | None = None,
 ) -> Flask:
     app = Flask(__name__)
     app.config["JSON_SORT_KEYS"] = False
@@ -52,12 +54,14 @@ def create_app(
     coding = jira_service or JiraCodingService(JiraClient(), repository)
     codex_usage = codex_usage_service or CodexUsageService()
     codex_handoff = codex_handoff_service or CodexHandoffService(repository)
+    codecrawler = codecrawler_service or CodeCrawlerService(repository)
     app.extensions["jaza_repository"] = repository
     app.extensions["jaza_pet_controller"] = pet_controller
     app.extensions["jaza_reporting_service"] = reports
     app.extensions["jaza_jira_service"] = coding
     app.extensions["jaza_codex_usage_service"] = codex_usage
     app.extensions["jaza_codex_handoff_service"] = codex_handoff
+    app.extensions["jaza_codecrawler_service"] = codecrawler
 
     @app.errorhandler(RequestValidationError)
     def handle_validation_error(error: RequestValidationError):
@@ -288,6 +292,30 @@ def create_app(
             ))
             return _integration_error(error)
         except CodexRuntimeError as error:
+            return jsonify({"error": error.code, "message": error.message}), error.status_code
+
+    @app.post("/api/coding/jira/issues/<key>/codecrawler")
+    def run_codecrawler_for_jira_issue(key: str):
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict) or set(payload) != {"local_project_id"} or not isinstance(
+            payload.get("local_project_id"), str
+        ):
+            return jsonify(
+                {
+                    "error": "validation_error",
+                    "message": "Only a known Jaza local_project_id is accepted.",
+                }
+            ), 400
+        local_project_id = payload["local_project_id"]
+        try:
+            # This stores only the project ID resolved by shared authority; the
+            # crawler service independently resolves that same ID before launch.
+            coding.set_repository(key, local_project_id)
+            crawl = codecrawler.run(local_project_id, jira_key=key)
+            return jsonify({"item": coding.issue(key), "crawl": crawl})
+        except JiraIntegrationError as error:
+            return _integration_error(error)
+        except CodeCrawlerError as error:
             return jsonify({"error": error.code, "message": error.message}), error.status_code
 
     @app.get("/api/coding/codex-usage")
