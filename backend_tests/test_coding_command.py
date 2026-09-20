@@ -18,6 +18,7 @@ from jaza_sentinel.codex_runtime import (
 )
 from jaza_sentinel.codecrawler import CodeCrawlerError, CodeCrawlerService
 from jaza_sentinel.integrations.jira import JiraCodingService, JiraIntegrationError
+from jaza_sentinel.integrations.jira.artifacts import JiraArtifactService
 from jaza_sentinel.integrations.jira.service import adf_to_markdown, adf_to_text, text_to_adf
 from jaza_sentinel.storage import JsonStateRepository
 
@@ -27,6 +28,7 @@ class FakeJiraClient:
 
     def __init__(self) -> None:
         self.created = 0
+        self.attachment_bytes: dict[str, bytes] = {}
         self.issues: dict[str, dict[str, Any]] = {
             "SCRUM-1": self._issue("SCRUM-1", "Existing sprint work", "In Progress", "Original full text", True),
             "SCRUM-9": self._issue("SCRUM-9", "Backlog only", "To Do", "Must not appear", False),
@@ -47,6 +49,7 @@ class FakeJiraClient:
                     {"id": 2, "name": "SCRUM Sprint 0", "state": "active"}
                 ] if in_sprint else [],
                 "labels": labels or [],
+                "attachment": [],
             },
         }
 
@@ -105,6 +108,29 @@ class FakeJiraClient:
             self.issues[key]["fields"]["status"] = {"name": "In Progress"}
             return {}
         raise AssertionError((path, json))
+
+    def download_attachment(self, attachment_id: str, content_reference: str, *, max_bytes: int) -> bytes:
+        assert content_reference.endswith(f"/attachment/content/{attachment_id}")
+        payload = self.attachment_bytes[attachment_id]
+        assert len(payload) <= max_bytes
+        return payload
+
+    def upload_attachment(self, issue_key: str, filename: str, content_type: str, payload: bytes):
+        attachment_id = str(1000 + len(self.attachment_bytes))
+        self.attachment_bytes[attachment_id] = payload
+        self.issues[issue_key]["fields"]["attachment"].append({
+            "id": attachment_id, "filename": filename, "mimeType": content_type,
+            "size": len(payload), "content": f"https://jira.example/rest/api/3/attachment/content/{attachment_id}",
+        })
+        return [self.issues[issue_key]["fields"]["attachment"][-1]]
+
+    def add_attachment(self, issue_key: str, attachment_id: str, filename: str, payload: bytes, mime_type="text/plain"):
+        self.attachment_bytes[attachment_id] = payload
+        self.issues[issue_key]["fields"]["attachment"].append({
+            "id": attachment_id, "filename": filename, "mimeType": mime_type, "size": len(payload),
+            "created": "2026-09-10T12:00:00.000+0000", "author": {"displayName": "King Trizzen"},
+            "content": f"https://jira.example/rest/api/3/attachment/content/{attachment_id}",
+        })
 
 
 @pytest.fixture
@@ -182,6 +208,58 @@ def test_story_detail_returns_full_description(jira):
     assert service.issue("SCRUM-1")["description"] == "Original full text"
 
 
+def test_attachment_metadata_uses_jira_ids_and_requires_selection_above_five(jira):
+    service, client = jira
+    for number in range(6):
+        client.add_attachment("SCRUM-1", str(100 + number), "same-name.md", f"row-{number}".encode())
+    story = service.issue("SCRUM-1")
+    assert story["attachments"]["count"] == 6
+    assert story["attachments"]["requires_selection"] is True
+    assert {item["attachment_id"] for item in story["attachments"]["attachments"]} == {str(100 + number) for number in range(6)}
+    selected = service.select_attachments("SCRUM-1", ["100", "101"])
+    assert selected["attachments"]["selected_count"] == 2
+    with pytest.raises(JiraIntegrationError) as rejected:
+        service.select_attachments("SCRUM-1", ["999"])
+    assert rejected.value.code == "attachment_not_on_issue"
+
+
+def test_artifacts_are_ticket_scoped_hashed_and_never_reused_by_filename(jira, repository):
+    service, client = jira
+    client.add_attachment("SCRUM-1", "101", "../../architecture.md", b"first")
+    client.add_attachment("SCRUM-1", "102", "architecture.md", b"second")
+    artifacts = JiraArtifactService(client, repository)
+    result = artifacts.materialize("SCRUM-1", service.attachment_sources("SCRUM-1"))
+    assert result["ready"] is True
+    first, second = result["attachments"]
+    assert first["local_path"] != second["local_path"]
+    assert Path(first["local_path"]).parent.name == "SCRUM-1"
+    assert Path(first["local_path"]).read_bytes() == b"first"
+    assert first["sha256"] == __import__("hashlib").sha256(b"first").hexdigest()
+    assert ".." not in Path(first["local_path"]).name
+    client.issues["SCRUM-1"]["fields"]["attachment"] = [client.issues["SCRUM-1"]["fields"]["attachment"][1]]
+    fresh = artifacts.materialize("SCRUM-1", service.attachment_sources("SCRUM-1"))
+    assert fresh["attachments"][0]["attachment_id"] == "102"
+    assert Path(fresh["attachments"][0]["local_path"]).read_bytes() == b"second"
+    cross_ticket = artifacts.materialize("SCRUM-2", service.attachment_sources("SCRUM-1"))
+    assert cross_ticket["ready"] is False
+    assert cross_ticket["attachments"][0]["error"] == "attachment_not_on_issue"
+    assert not (artifacts.root / "SCRUM-2" / "102--architecture.md").exists()
+
+
+def test_failed_attachment_blocks_begin_without_transition_or_codex(repository, jira, paladin, tmp_path):
+    service, client = jira
+    client.add_attachment("SCRUM-1", "101", "unsafe.zip", b"zip")
+    app = create_app(
+        data_dir=tmp_path / "app-state", jira_service=service, codex_usage_service=FakeUsage(),
+        codex_handoff_service=FakeVisibleHandoff(), jira_artifact_service=JiraArtifactService(client, repository),
+    )
+    app.config["TESTING"] = True
+    response = app.test_client().post("/api/coding/jira/issues/SCRUM-1/begin", json={"local_project_id": "gtkportal2", "surface": "APP"})
+    assert response.status_code == 409
+    assert response.get_json()["error"] == "artifact_not_ready"
+    assert client.issues["SCRUM-1"]["fields"]["status"]["name"] == "In Progress"
+
+
 def test_begin_transition_only_allows_todo_or_in_progress(jira):
     service, client = jira
     client.issues["SCRUM-1"]["fields"]["status"] = {"name": "To Do"}
@@ -208,6 +286,16 @@ def test_codex_prompt_contains_key_summary_and_unmodified_full_description():
     assert "JIRA WORK ITEM: SCRUM-7" in prompt
     assert "TITLE: Precise work" in prompt
     assert prompt.endswith(description)
+
+
+def test_codex_prompt_preserves_markdown_and_trusted_artifact_manifest():
+    prompt = CodexHandoffService._prompt({
+        "jira_key": "SCRUM-7", "summary": "Precise work", "description": "flat", "markdown_description": "## Exact\n\n- `diagram.png`",
+        "attachment_manifest": "## Jira Attachments\n\n- `diagram.png` — local artifact: `/runtime/SCRUM-7/101--diagram.png` — SHA-256: `abc`",
+    })
+    assert "## Exact\n\n- `diagram.png`" in prompt
+    assert "Jira Attachments" in prompt
+    assert "/runtime/SCRUM-7/101--diagram.png" in prompt
 
 
 def test_five_hour_usage_parses_real_app_server_shape_and_missing_is_unavailable(monkeypatch):

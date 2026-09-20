@@ -87,6 +87,31 @@ export interface CodeCrawlerRun {
   output_paths: string[];
 }
 
+export type JiraAttachmentStatus = 'not_materialized' | 'ready' | 'failed';
+
+export interface JiraAttachment {
+  attachment_id: string;
+  filename: string;
+  mime_type: string | null;
+  size: number | null;
+  author: string | null;
+  created: string | null;
+  selected: boolean;
+  status: JiraAttachmentStatus;
+  sha256: string | null;
+  error: string | null;
+}
+
+export interface JiraAttachments {
+  count: number;
+  selected_count: number;
+  limit: number;
+  requires_selection: boolean;
+  ready: boolean;
+  message: string | null;
+  attachments: JiraAttachment[];
+}
+
 export interface CodingStory {
   jira_key: string;
   summary: string;
@@ -107,6 +132,7 @@ export interface CodingStory {
   execution_last_activity: string | null;
   execution_last_activity_at: string | null;
   codecrawler: CodeCrawlerRun | null;
+  attachments: JiraAttachments;
 }
 
 export interface CodingBoard {

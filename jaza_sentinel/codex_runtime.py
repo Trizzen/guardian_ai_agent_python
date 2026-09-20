@@ -227,7 +227,10 @@ class CodexHandoffService:
             if selected_surface == "APP":
                 self._copy_prompt(prompt)
                 self._open_app(resolved)
-                activity = "Workspace opened and exact Jira specification prepared for human submission."
+                activity = (
+                    "Workspace opened; artifact manifest is on the clipboard for manual inspection in Codex Desktop."
+                    if story.get("attachment_manifest") else "Workspace opened and exact Jira specification prepared for human submission."
+                )
             else:
                 self._open_terminal(self._terminal_command(resolved, prompt))
                 activity = "Visible Terminal launch requested; Codex session identity is not yet known."
@@ -270,13 +273,16 @@ class CodexHandoffService:
 
     @staticmethod
     def _prompt(story: dict[str, Any]) -> str:
+        specification = str(story.get("markdown_description") or story["description"])
+        attachments = str(story.get("attachment_manifest") or "").strip()
+        attachment_note = f"\n\n{attachments}\n" if attachments else ""
         return (
             f'JIRA WORK ITEM: {story["jira_key"]}\n'
             f'TITLE: {story["summary"]}\n\n'
             "Execute the approved specification below exactly.\n"
             "Preserve all stated constraints and acceptance criteria.\n\n"
             "--- APPROVED SPECIFICATION ---\n"
-            f'{story["description"]}'
+            f'{specification}{attachment_note}'
         )
 
     def _terminal_command(self, repository_path: Path, prompt: str) -> list[str]:

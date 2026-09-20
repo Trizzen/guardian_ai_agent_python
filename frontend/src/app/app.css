@@ -1595,6 +1595,16 @@ footer {
 .codecrawler-surface .crawl-failed { color: #ff9eb3; }
 .codecrawler-surface .begin-action { margin-top: 0; white-space: nowrap; }
 .codecrawler-output { display: grid; gap: 2px; margin-top: 7px; padding-left: 10px; }
+.jira-attachments { margin-top: 12px; padding: 10px; border: 1px solid rgba(92, 229, 220, 0.18); border-radius: 7px; background: rgba(92, 229, 220, 0.025); }
+.jira-attachments-heading { display: flex; justify-content: space-between; gap: 12px; color: #b9f3ed; font-size: 0.55rem; font-weight: 780; letter-spacing: 0.06em; text-transform: uppercase; }
+.jira-attachments-heading small { color: var(--dim); font-size: 0.49rem; font-weight: 500; letter-spacing: normal; text-transform: none; }
+.jira-attachment-row { display: flex; gap: 8px; align-items: flex-start; margin-top: 8px; color: #d8d2e3; font-size: 0.57rem; }
+.jira-attachment-row strong, .jira-attachment-row small { display: block; }
+.jira-attachment-row small, .attachment-empty, .attachment-upload { margin-top: 3px; color: var(--dim); font-size: 0.5rem; }
+.jira-attachment-row.attachment-failed { color: #ff9eb3; }
+.attachment-warning { color: #ffafc9 !important; }
+.attachment-upload { display: block; margin-top: 10px; }
+.attachment-upload input { display: block; margin-top: 5px; font-size: 0.51rem; }
 .jira-description { margin-top: 13px; }
 .jira-description-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 7px; }
 .jira-description-heading > span { color: var(--dim); font-size: 0.52rem; font-weight: 780; letter-spacing: 0.08em; text-transform: uppercase; }

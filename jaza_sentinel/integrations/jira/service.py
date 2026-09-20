@@ -9,6 +9,7 @@ from typing import Any
 from ...storage import JsonStateRepository
 from ...repositories import known_repositories, resolve_known_repository
 from .client import JiraClient, JiraIntegrationError
+from .artifacts import MAX_HANDOFF_ATTACHMENTS
 
 
 STATUS_MAP = {
@@ -39,7 +40,7 @@ class JiraCodingService:
             "/rest/api/3/search/jql",
             params={
                 "jql": f'project = {context["project_key"]} AND sprint = {int(sprint["id"])} ORDER BY rank ASC',
-                "fields": f'summary,description,status,assignee,priority,issuetype,{context["sprint_field_id"]}',
+                "fields": f'summary,description,status,assignee,priority,issuetype,attachment,{context["sprint_field_id"]}',
                 "maxResults": 100,
             },
         )
@@ -63,7 +64,7 @@ class JiraCodingService:
         issue = self.client.get(
             f"/rest/api/3/issue/{key}",
             params={
-                "fields": f'summary,description,status,assignee,priority,issuetype,{context["sprint_field_id"]}'
+                "fields": f'summary,description,status,assignee,priority,issuetype,attachment,{context["sprint_field_id"]}'
             },
         )
         story = self._story(issue, context["sprint"])
@@ -186,6 +187,38 @@ class JiraCodingService:
             {"local_project_id": project["id"], "repository_path": project["repository_path"]},
         )
 
+    def select_attachments(self, key: str, attachment_ids: object) -> dict[str, Any]:
+        self._validate_key(key)
+        if not isinstance(attachment_ids, list) or any(not isinstance(item, str) or not item.isdigit() for item in attachment_ids):
+            raise JiraIntegrationError("validation_error", "Attachment selection must contain Jira attachment IDs only.", status_code=400)
+        if len(attachment_ids) > MAX_HANDOFF_ATTACHMENTS or len(set(attachment_ids)) != len(attachment_ids):
+            raise JiraIntegrationError("validation_error", "Choose between zero and five distinct Jira attachments.", status_code=400)
+        known = {item["attachment_id"] for item in self.attachment_sources(key)}
+        if not set(attachment_ids) <= known:
+            raise JiraIntegrationError("attachment_not_on_issue", "Choose attachments belonging to this Jira issue only.", status_code=409)
+        self.local.update_coding_association(key, {"selected_attachment_ids": list(attachment_ids), "attachment_handoff": {"attachments": [], "ready": False, "message": None}})
+        return self.issue(key)
+
+    def attachment_sources(self, key: str) -> list[dict[str, Any]]:
+        self._validate_key(key)
+        context = self._jira_context()
+        issue = self.client.get(f"/rest/api/3/issue/{key}", params={"fields": "attachment"})
+        return self._attachment_sources(issue, key)
+
+    def upload_attachment(self, key: str, filename: str, content_type: str, payload: bytes) -> dict[str, Any]:
+        self._validate_key(key)
+        # Read the issue first: this proves sprint membership and prevents an upload to an arbitrary key.
+        self.issue(key)
+        sources = self.attachment_sources(key)
+        if len(sources) >= MAX_HANDOFF_ATTACHMENTS:
+            raise JiraIntegrationError("attachment_limit_reached", "This Jira issue already has Sentinel's maximum of five attachments.", status_code=409)
+        candidate = {"attachment_id": "1", "filename": filename, "size": len(payload), "mime_type": content_type, "content_reference": "https://invalid/rest/api/3/attachment/content/1"}
+        from .artifacts import JiraArtifactService
+        JiraArtifactService._validate_source(candidate)
+        self.client.upload_attachment(key, filename, content_type, payload)
+        self.local.update_coding_association(key, {"attachment_handoff": {"attachments": [], "ready": False, "message": None}})
+        return self.issue(key)
+
     def known_repositories(self) -> list[dict[str, str]]:
         return known_repositories(self.local)
 
@@ -256,6 +289,12 @@ class JiraCodingService:
         )
         key = str(issue.get("key") or "")
         association = self.local.coding_association(key)
+        attachments = self._attachment_sources(issue, key)
+        selected_ids = association.get("selected_attachment_ids")
+        if not isinstance(selected_ids, list) or not all(isinstance(item, str) for item in selected_ids):
+            selected_ids = [item["attachment_id"] for item in attachments] if len(attachments) <= MAX_HANDOFF_ATTACHMENTS else []
+        # A Jira refresh can remove an attachment; do not retain a stale selection by filename or ID.
+        selected_ids = [item for item in selected_ids if item in {source["attachment_id"] for source in attachments}]
         project = next(
             (item for item in self.local.projects() if item.get("id") == association.get("local_project_id")),
             None,
@@ -298,7 +337,33 @@ class JiraCodingService:
             "execution_last_activity": association.get("execution_last_activity"),
             "execution_last_activity_at": association.get("execution_last_activity_at"),
             "codecrawler": crawl if local_project_id else None,
+            "attachments": self._attachment_summary(key, selected_ids, attachments),
         }
+
+    def _attachment_sources(self, issue: dict[str, Any], issue_key: str) -> list[dict[str, Any]]:
+        raw = (issue.get("fields") or {}).get("attachment") or []
+        if not isinstance(raw, list):
+            return []
+        output: list[dict[str, Any]] = []
+        for item in raw:
+            if not isinstance(item, dict) or not item.get("id") or not item.get("filename"):
+                continue
+            output.append({
+                "issue_key": issue_key, "attachment_id": str(item["id"]), "filename": str(item["filename"]),
+                "mime_type": item.get("mimeType"), "size": item.get("size"), "created": item.get("created"),
+                "author": (item.get("author") or {}).get("displayName"), "content_reference": str(item.get("content") or ""),
+            })
+        return output
+
+    def _attachment_summary(self, key: str, selected_ids: list[str], sources: list[dict[str, Any]]) -> dict[str, Any]:
+        stored = self.local.coding_association(key).get("attachment_handoff", {})
+        saved = {str(item.get("attachment_id")): item for item in stored.get("attachments", []) if isinstance(item, dict)} if isinstance(stored, dict) else {}
+        rows = []
+        for source in sources:
+            prior = saved.get(source["attachment_id"], {})
+            rows.append({"attachment_id": source["attachment_id"], "filename": source["filename"], "mime_type": source.get("mime_type"), "size": source.get("size"), "author": source.get("author"), "created": source.get("created"), "selected": source["attachment_id"] in selected_ids, "status": prior.get("status", "not_materialized"), "sha256": prior.get("sha256"), "error": prior.get("error")})
+        required_selection = len(sources) > MAX_HANDOFF_ATTACHMENTS and not selected_ids
+        return {"count": len(sources), "selected_count": len(selected_ids), "limit": MAX_HANDOFF_ATTACHMENTS, "requires_selection": required_selection, "ready": bool(stored.get("ready")) and not required_selection if isinstance(stored, dict) else False, "message": (stored.get("message") if isinstance(stored, dict) else None) or ("Choose up to five attachments before beginning." if required_selection else None), "attachments": rows}
 
     def _find_bootstrap_issue(self, item_id: str) -> str | None:
         context = self._jira_context()

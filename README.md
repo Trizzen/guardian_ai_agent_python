@@ -104,7 +104,19 @@ Copy `.env.example` to the ignored `.env` only when configuring a new checkout. 
 
 The current local ignored `.env` contains only pointers to the existing GTK and MenuShield environment files plus non-secret model/cache settings. It contains no copied key or database URI.
 
-Coding Command reads the existing Jira variables `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`, and `JIRA_PROJECT_KEY`. Credentials remain backend-only. Jira owns Sprint 0 story content and workflow state; Jaza JSON stores only local work-item links, repository selection, and Codex thread/handoff metadata. Codex five-hour usage comes from the structured App Server `account/rateLimits/read` response, and Begin invokes only the allowlisted `codex exec --json` / `codex exec resume --json` commands against configured project repositories.
+Coding Command reads the existing Jira variables `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`, and `JIRA_PROJECT_KEY`. Credentials remain backend-only. Jira owns Sprint 0 story content and workflow state; Jaza JSON stores only local work-item links, repository selection, and Codex thread/handoff metadata. Codex five-hour usage comes from the structured App Server `account/rateLimits/read` response, and Begin invokes only the supported human-visible APP or interactive TERMINAL handoff against configured project repositories.
+
+### Jira attachment handoff policy
+
+Jira attachments are optional, ticket-owned handoff artifacts. Sentinel discovers the Jira attachment ID, exact visible filename, MIME type, size, author/timestamp when supplied, and Jira-issued content reference, but exposes no arbitrary download URL or server filesystem destination to the browser.
+
+- A handoff may select **0–5** attachments. An issue with more than five requires an explicit selection before it can begin; Sentinel never chooses an arbitrary first five.
+- Supported data artifacts are PDFs, text/Markdown, JSON/YAML, CSV/TSV, common images, and source/config snippets. Archives, executables, extensionless files, and files over **25 MiB** are rejected. Attachments are never executed.
+- On Begin, the backend re-fetches the selected issue-owned attachment metadata and downloads only the authenticated Jira content route for that stable attachment ID. It writes atomically under the ignored Sentinel runtime workspace `data/runtime/jira-artifacts/<JIRA-KEY>/`, using an ID-prefixed sanitized local name. Nothing is written to the target repository.
+- Each ready artifact records its issue key, Jira ID, original and local names, size, MIME type, retrieval time, and SHA-256. The exact Jira Markdown specification remains unchanged; Sentinel appends a deterministic artifact manifest with the controlled path and digest to the visible Codex prompt.
+- APP has no invented Desktop file-attachment API: Sentinel opens the chosen repository and places the full specification plus manifest on the clipboard, explicitly marking artifact inspection as manual. TERMINAL receives the same controlled paths in its visible interactive prompt.
+
+The existing Jira Cloud REST integration supports its documented multipart `POST /rest/api/3/issue/{issueIdOrKey}/attachments` capability, including the required `X-Atlassian-Token: no-check` header. Sentinel therefore exposes one bounded browser file upload for the current Sprint 0 issue only; it reads file bytes rather than a browser path, applies the same type/size and five-attachment limits, and never implements a generic HTTP downloader.
 
 ## Run the backend
 
@@ -145,6 +157,8 @@ Coding Command endpoints are:
 - `POST /api/coding/jira/issues`
 - `GET /api/coding/jira/issues/<key>`
 - `POST /api/coding/jira/issues/<key>/begin`
+- `POST /api/coding/jira/issues/<key>/attachments/selection`
+- `POST /api/coding/jira/issues/<key>/attachments` (one multipart `artifact` file)
 - `GET /api/coding/codex-usage`
 
 ## Run the Angular frontend

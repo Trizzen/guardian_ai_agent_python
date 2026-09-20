@@ -104,6 +104,7 @@ export class AppComponent implements OnInit {
   storyLoading = false;
   startingStory = '';
   crawlingStory = '';
+  uploadingStory = '';
   repositorySelections: Record<string, string> = {};
   showJiraEditor = false;
   jiraForm = { title: '', description: '' };
@@ -324,7 +325,7 @@ export class AppComponent implements OnInit {
     this.startingStory = story.jira_key;
     this.codingError = '';
     this.api
-      .beginCodingStory(story.jira_key, surface, localProjectId || undefined)
+      .beginCodingStory(story.jira_key, surface, localProjectId || undefined, story.attachments.attachments.filter((attachment) => attachment.selected).map((attachment) => attachment.attachment_id))
       .pipe(
         finalize(() => {
           this.startingStory = '';
@@ -351,6 +352,43 @@ export class AppComponent implements OnInit {
           this.changeDetector.markForCheck();
         },
       });
+  }
+
+  toggleAttachment(story: CodingStory, attachmentId: string, selected: boolean): void {
+    const ids = story.attachments.attachments
+      .filter((attachment) => attachment.selected || attachment.attachment_id === attachmentId && selected)
+      .filter((attachment) => attachment.attachment_id !== attachmentId || selected)
+      .map((attachment) => attachment.attachment_id);
+    if (ids.length > story.attachments.limit) {
+      this.codingError = `Choose at most ${story.attachments.limit} Jira attachments.`;
+      return;
+    }
+    this.codingError = '';
+    this.api.selectCodingAttachments(story.jira_key, ids).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
+      next: ({ item }) => this.replaceCodingStory(item),
+      error: (error: HttpErrorResponse) => (this.codingError = this.describeError(error)),
+    });
+  }
+
+  uploadAttachment(story: CodingStory, event: Event): void {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.item(0);
+    if (!file || this.uploadingStory) return;
+    this.uploadingStory = story.jira_key;
+    this.codingError = '';
+    this.api.uploadCodingAttachment(story.jira_key, file).pipe(
+      finalize(() => { this.uploadingStory = ''; input.value = ''; this.changeDetector.markForCheck(); }),
+      takeUntilDestroyed(this.destroyRef),
+    ).subscribe({
+      next: ({ item }) => { this.replaceCodingStory(item); this.flash(`${item.jira_key} attachment uploaded to Jira; no model was invoked.`); },
+      error: (error: HttpErrorResponse) => (this.codingError = this.describeError(error)),
+    });
+  }
+
+  private replaceCodingStory(item: CodingStory): void {
+    this.selectedStory = item;
+    if (this.codingBoard) this.codingBoard = { ...this.codingBoard, stories: this.codingBoard.stories.map((current) => current.jira_key === item.jira_key ? item : current) };
+    this.changeDetector.markForCheck();
   }
 
   runCodeCrawler(story: CodingStory): void {

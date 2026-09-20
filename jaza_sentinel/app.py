@@ -14,6 +14,7 @@ from .codecrawler import CodeCrawlerError, CodeCrawlerService
 from .codex_pet import CodexPetConfigError, CodexPetController
 from .codex_runtime import CodexHandoffService, CodexRuntimeError, CodexUsageService
 from .integrations.jira import JiraClient, JiraCodingService, JiraIntegrationError
+from .integrations.jira.artifacts import JiraArtifactService, MAX_ARTIFACT_BYTES
 from .reporting import ReportingService
 from .reporting.service import ReportingInputError
 from .storage import JsonStateRepository
@@ -38,6 +39,7 @@ def create_app(
     codex_usage_service: CodexUsageService | None = None,
     codex_handoff_service: CodexHandoffService | None = None,
     codecrawler_service: CodeCrawlerService | None = None,
+    jira_artifact_service: JiraArtifactService | None = None,
 ) -> Flask:
     app = Flask(__name__)
     app.config["JSON_SORT_KEYS"] = False
@@ -55,6 +57,7 @@ def create_app(
     codex_usage = codex_usage_service or CodexUsageService()
     codex_handoff = codex_handoff_service or CodexHandoffService(repository)
     codecrawler = codecrawler_service or CodeCrawlerService(repository)
+    artifacts = jira_artifact_service or JiraArtifactService(getattr(coding, "client", JiraClient()), repository)
     app.extensions["jaza_repository"] = repository
     app.extensions["jaza_pet_controller"] = pet_controller
     app.extensions["jaza_reporting_service"] = reports
@@ -62,6 +65,8 @@ def create_app(
     app.extensions["jaza_codex_usage_service"] = codex_usage
     app.extensions["jaza_codex_handoff_service"] = codex_handoff
     app.extensions["jaza_codecrawler_service"] = codecrawler
+    app.extensions["jaza_jira_artifact_service"] = artifacts
+    app.config["MAX_CONTENT_LENGTH"] = MAX_ARTIFACT_BYTES + 1024 * 1024
 
     @app.errorhandler(RequestValidationError)
     def handle_validation_error(error: RequestValidationError):
@@ -261,7 +266,7 @@ def create_app(
         payload = request.get_json(silent=True)
         payload = payload if isinstance(payload, dict) else {}
         log_begin(key, local_project_id=payload.get("local_project_id"), surface=payload.get("surface"))
-        if set(payload) - {"local_project_id", "surface"}:
+        if set(payload) - {"local_project_id", "surface", "attachment_ids"}:
             log_begin(key, repository_validation="failed", launch="failed", error_code="validation_error")
             return jsonify(
                 {
@@ -273,6 +278,8 @@ def create_app(
             surface = codex_handoff.validate_surface(payload.get("surface"))
             if payload.get("local_project_id"):
                 coding.set_repository(key, str(payload["local_project_id"]))
+            if "attachment_ids" in payload:
+                coding.select_attachments(key, payload["attachment_ids"])
             story = coding.issue(key)
             if not story.get("local_repository_path"):
                 log_begin(key, repository_validation="failed", launch="failed", error_code="repository_required")
@@ -283,7 +290,20 @@ def create_app(
                         "repositories": coding.known_repositories(),
                     }
                 ), 409
+            attachment_summary = story.get("attachments") or {}
+            if attachment_summary.get("requires_selection"):
+                return jsonify({"error": "attachment_selection_required", "message": attachment_summary.get("message"), "item": story}), 409
+            sources = coding.attachment_sources(key)
+            association = coding.local.coding_association(key)
+            selected_ids = {str(item) for item in (association.get("selected_attachment_ids") or [])}
+            if "selected_attachment_ids" not in association and len(sources) <= 5:
+                selected_ids = {item["attachment_id"] for item in sources}
+            selected = [item for item in sources if item["attachment_id"] in selected_ids]
+            prepared_artifacts = artifacts.materialize(key, selected)
+            if not prepared_artifacts["ready"]:
+                return jsonify({"error": "artifact_not_ready", "message": prepared_artifacts["message"], "item": coding.issue(key)}), 409
             story = coding.transition_to_in_progress(key)
+            story["attachment_manifest"] = prepared_artifacts["manifest_markdown"]
             handoff = codex_handoff.begin(story, str(story["local_repository_path"]), surface)
             return jsonify({"item": coding.issue(key), "handoff": handoff})
         except JiraIntegrationError as error:
@@ -293,6 +313,31 @@ def create_app(
             return _integration_error(error)
         except CodexRuntimeError as error:
             return jsonify({"error": error.code, "message": error.message}), error.status_code
+
+    @app.post("/api/coding/jira/issues/<key>/attachments/selection")
+    def select_coding_jira_attachments(key: str):
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict) or set(payload) != {"attachment_ids"}:
+            return jsonify({"error": "validation_error", "message": "Only Jira attachment IDs are accepted."}), 400
+        try:
+            return jsonify({"item": coding.select_attachments(key, payload["attachment_ids"])})
+        except JiraIntegrationError as error:
+            return _integration_error(error)
+
+    @app.post("/api/coding/jira/issues/<key>/attachments")
+    def upload_coding_jira_attachment(key: str):
+        # Multipart bytes are accepted; a browser filesystem path is never accepted or logged.
+        if set(request.files) != {"artifact"} or request.form:
+            return jsonify({"error": "validation_error", "message": "Upload exactly one artifact file."}), 400
+        uploaded = request.files["artifact"]
+        filename = str(uploaded.filename or "")
+        payload = uploaded.stream.read(MAX_ARTIFACT_BYTES + 1)
+        if len(payload) > MAX_ARTIFACT_BYTES:
+            return jsonify({"error": "jira_attachment_too_large", "message": "Attachment exceeds Sentinel's 25 MiB file-size limit."}), 409
+        try:
+            return jsonify({"item": coding.upload_attachment(key, filename, str(uploaded.mimetype or ""), payload)}), 201
+        except JiraIntegrationError as error:
+            return _integration_error(error)
 
     @app.post("/api/coding/jira/issues/<key>/codecrawler")
     def run_codecrawler_for_jira_issue(key: str):

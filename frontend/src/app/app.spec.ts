@@ -122,6 +122,7 @@ describe('AppComponent', () => {
                     jira_key: 'SCRUM-1',
                     summary: 'Existing work',
                     description: 'Full description',
+                    markdown_description: 'Full description',
                     status: 'in_progress',
                     assignee: 'King Trizzen',
                     priority: 'Medium',
@@ -136,6 +137,11 @@ describe('AppComponent', () => {
                     execution_prepared_at: null,
                     execution_last_activity: null,
                     execution_last_activity_at: null,
+                    codecrawler: null,
+                    attachments: {
+                      count: 1, selected_count: 1, limit: 5, requires_selection: false, ready: false, message: null,
+                      attachments: [{ attachment_id: '101', filename: 'architecture.md', mime_type: 'text/markdown', size: 42, author: 'King Trizzen', created: null, selected: true, status: 'not_materialized', sha256: null, error: null }],
+                    },
                   },
                 ],
                 repositories: [],
@@ -216,6 +222,7 @@ describe('AppComponent', () => {
       execution_last_activity: null,
       execution_last_activity_at: null,
       codecrawler: null,
+      attachments: { count: 0, selected_count: 0, limit: 5, requires_selection: false, ready: false, message: null, attachments: [] },
     };
     const descriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
     let copied = '';

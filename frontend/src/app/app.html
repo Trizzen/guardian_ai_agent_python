@@ -416,6 +416,17 @@
                                   @for (outputPath of story.codecrawler?.output_paths || []; track outputPath) { <small>{{ outputPath }}</small> }
                                 </div>
                               }
+                              <section class="jira-attachments" aria-label="Jira attachments">
+                                <div class="jira-attachments-heading"><span>Jira attachments · {{ story.attachments.selected_count }}/{{ story.attachments.limit }} selected</span><small>{{ story.attachments.count === 0 ? 'None attached' : (story.attachments.ready ? 'Integrity verified and ready' : (story.attachments.message || 'Retrieved only when preparing handoff')) }}</small></div>
+                                @for (attachment of story.attachments.attachments; track attachment.attachment_id) {
+                                  <label class="jira-attachment-row" [class.attachment-failed]="attachment.status === 'failed'">
+                                    <input type="checkbox" [checked]="attachment.selected" (change)="toggleAttachment(story, attachment.attachment_id, $any($event.target).checked)" />
+                                    <span><strong>{{ attachment.filename }}</strong><small>{{ attachment.mime_type || 'Unknown type' }} · {{ attachment.size === null ? 'Unknown size' : (attachment.size + ' bytes') }} · {{ attachment.status }}@if (attachment.error) { · {{ attachment.error }} }</small></span>
+                                  </label>
+                                } @empty { <small class="attachment-empty">No supported Jira artifacts are attached to this issue.</small> }
+                                @if (story.attachments.requires_selection) { <p class="attachment-warning">This issue has more than five attachments. Choose the intended handoff set before APP or TERMINAL preparation.</p> }
+                                <label class="attachment-upload">Add a supported artifact to this Jira issue <input type="file" [disabled]="!!uploadingStory" (change)="uploadAttachment(story, $event)" /></label>
+                              </section>
                               <div class="execution-surface" aria-label="Codex execution surface">
                                 <span>Choose visible execution surface</span>
                                 <div>

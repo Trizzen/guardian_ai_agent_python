@@ -136,11 +136,22 @@ export class SentinelApiService {
     key: string,
     surface: 'APP' | 'TERMINAL',
     localProjectId?: string,
+    attachmentIds?: string[],
   ): Observable<{ item: CodingStory; handoff: Record<string, unknown> }> {
     return this.http.post<{ item: CodingStory; handoff: Record<string, unknown> }>(
       `/api/coding/jira/issues/${key}/begin`,
-      localProjectId ? { local_project_id: localProjectId, surface } : { surface },
+      { ...(localProjectId ? { local_project_id: localProjectId } : {}), surface, ...(attachmentIds ? { attachment_ids: attachmentIds } : {}) },
     );
+  }
+
+  selectCodingAttachments(key: string, attachmentIds: string[]): Observable<ItemResponse<CodingStory>> {
+    return this.http.post<ItemResponse<CodingStory>>(`/api/coding/jira/issues/${key}/attachments/selection`, { attachment_ids: attachmentIds });
+  }
+
+  uploadCodingAttachment(key: string, file: File): Observable<ItemResponse<CodingStory>> {
+    const body = new FormData();
+    body.append('artifact', file, file.name);
+    return this.http.post<ItemResponse<CodingStory>>(`/api/coding/jira/issues/${key}/attachments`, body);
   }
 
   runCodeCrawler(

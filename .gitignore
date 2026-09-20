@@ -31,6 +31,7 @@ token.json
 
 data/runtime/*.json
 data/runtime/*.corrupt-*
+data/runtime/jira-artifacts/
 !data/runtime/.gitkeep
 
 # Angular output
